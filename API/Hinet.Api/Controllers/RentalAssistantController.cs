@@ -50,6 +50,40 @@ public class RentalAssistantController(
     });
 
     public record PauseRequest(bool Paused);
+    public record TrackingRequest([Required, MaxLength(500)] string PostUrl);
+    [HttpPut("deliveries/{id:guid}/tracking")]
+    public async Task<IActionResult> Track(Guid id, TrackingRequest input, CancellationToken ct)
+    {
+        if (!RentalEngagement.ValidPostUrl(input.PostUrl)) return BadRequest("Dùng link https://www.facebook.com/groups/TEN_NHOM/posts/ID_BAI hoặc /permalink/ID_BAI.");
+        var row = await db.Deliveries.FindAsync(new object[] { id }, ct);
+        if (row is null) return NotFound();
+        if (row.Status != "Submitted") return BadRequest("Chỉ theo dõi tương tác cho lượt đã gửi.");
+        var url = RentalEngagement.Canonical(input.PostUrl);
+        if (await db.Deliveries.AnyAsync(d => d.Id != id && d.PostUrl == url, ct)) return Conflict("Link này đã được gắn cho một lượt gửi khác.");
+        if (row.PostUrl != url) { row.Reactions = null; row.Comments = null; row.Shares = null; row.MetricsCheckedAt = null; }
+        row.PostUrl = url; row.MetricsRequested = true; row.MetricsError = "";
+        row.LinkStatus = "Found";
+        await db.SaveChangesAsync(ct);
+        return Ok();
+    }
+    [HttpPost("metrics/sync")]
+    public async Task<IActionResult> SyncMetrics(CancellationToken ct)
+    {
+        if (!options.Value.Enabled || !options.Value.BrowserEnabled) return BadRequest("Bật worker và trình duyệt Facebook trong cấu hình để đồng bộ.");
+        var count = await db.Deliveries.Where(d => d.Status == "Submitted" && d.PostUrl != "")
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.MetricsRequested, true), ct);
+        count += await db.Deliveries.Where(d => d.Status == "Submitted" && d.PostUrl == "")
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.LinkCheckedAt, (DateTimeOffset?)null).SetProperty(d => d.LinkStatus, "AwaitingLink"), ct);
+        return Ok(new { queued = count });
+    }
+    [HttpPost("deliveries/{id:guid}/find-link")]
+    public async Task<IActionResult> FindLink(Guid id, CancellationToken ct)
+    {
+        if (!options.Value.Enabled || !options.Value.BrowserEnabled) return BadRequest("Bật worker và trình duyệt Facebook để tự tìm link bài.");
+        var count = await db.Deliveries.Where(d => d.Id == id && d.Status == "Submitted" && d.PostUrl == "")
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.LinkCheckedAt, (DateTimeOffset?)null).SetProperty(d => d.LinkStatus, "AwaitingLink"), ct);
+        return count == 1 ? Ok() : BadRequest("Bài đã có link hoặc chưa được gửi.");
+    }
     [HttpPut("state")]
     public async Task<IActionResult> State(PauseRequest input, CancellationToken ct)
     {

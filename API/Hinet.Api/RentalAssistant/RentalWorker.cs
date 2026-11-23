@@ -16,13 +16,15 @@ public class RentalWorker(
     private readonly HttpClient telegram = new() { Timeout = TimeSpan.FromSeconds(60) };
     private bool inboxInitialized;
     private DateTimeOffset lastInbox;
+    private DateTimeOffset telegramNoticeRetryAt;
+    private bool messengerConfigurationWarningSent;
     public static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         if (!o.Enabled) return;
-        if (string.IsNullOrWhiteSpace(o.ManagementKey) || o.ManagementKey.Length < 32 || o.TelegramOwnerId <= 0 || string.IsNullOrWhiteSpace(o.TelegramToken))
-        { log.LogError("RentalAssistant requires ManagementKey (32+ characters), TelegramOwnerId and TelegramToken."); return; }
+        if (string.IsNullOrWhiteSpace(o.ManagementKey) || o.ManagementKey.Length < 32)
+        { log.LogError("RentalAssistant requires ManagementKey (32+ characters)."); return; }
         // A session-owned SQL lock prevents two processes from posting/replying simultaneously.
         await using var lease = await factory.CreateDbContextAsync(ct);
         try
@@ -48,18 +50,25 @@ public class RentalWorker(
                 // Any operation interrupted by a crash needs human review, never automatic resend.
                 await db.Deliveries.Where(x => x.Status == "Sending").ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, "NeedsReview"), ct);
                 await db.Threads.Where(x => x.Status == "Replying").ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, "NeedsReview").SetProperty(x => x.AutoReply, false), ct);
-                await PollTelegram(db, state, ct);
+                if (o.TelegramOwnerId > 0 && !string.IsNullOrWhiteSpace(o.TelegramToken))
+                {
+                    try { await PollTelegram(db, state, ct); }
+                    catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning("Telegram polling failed ({Type}); dashboard tasks can continue.", ex.GetType().Name); }
+                }
                 db.ChangeTracker.Clear();
                 state = await db.State.SingleAsync(ct);
                 if (!state.Paused && o.BrowserEnabled)
                 {
                     await Deliver(db, state, ct);
-                    if (DateTimeOffset.UtcNow - lastInbox >= TimeSpan.FromSeconds(Math.Max(30, o.InboxIntervalSeconds)))
-                    {
-                        lastInbox = DateTimeOffset.UtcNow;
-                        await Inbox(db, ct);
-                    }
                 }
+                if (o.BrowserEnabled && DateTimeOffset.UtcNow - lastInbox >= TimeSpan.FromSeconds(Math.Max(30, o.InboxIntervalSeconds)))
+                {
+                    lastInbox = DateTimeOffset.UtcNow;
+                    await Inbox(db, ct);
+                }
+                if (o.BrowserEnabled) await SyncMetrics(db, ct);
+                if (o.BrowserEnabled) await ResolveMissingLink(db, ct);
+                await FlushTelegramNotice(db, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex) { log.LogError("Rental worker failed ({Type}). Check database, credentials and selectors.", ex.GetType().Name); }
@@ -77,8 +86,11 @@ public class RentalWorker(
         return result.RootElement.GetProperty("result").Clone();
     }
     public override void Dispose() { telegram.Dispose(); base.Dispose(); }
-    private async Task Notify(string text, CancellationToken ct) =>
+    private async Task Notify(string text, CancellationToken ct)
+    {
+        if (o.TelegramOwnerId <= 0 || string.IsNullOrWhiteSpace(o.TelegramToken)) return;
         _ = await Telegram("sendMessage", new { chat_id = o.TelegramOwnerId, text = text[..Math.Min(4000, text.Length)] }, ct);
+    }
 
     private async Task PollTelegram(RentalDb db, RentalState state, CancellationToken ct)
     {
@@ -139,7 +151,7 @@ public class RentalWorker(
                 if (await db.Posts.AnyAsync(x => x.TelegramUpdateId == updateId, ct)) break;
                 RentalRoom? room;
                 if (command == "/dang" && parts.Length >= 2 && Guid.TryParse(parts[1], out var roomId)) room = await db.Rooms.SingleOrDefaultAsync(x => x.Id == roomId && x.Available, ct);
-                else { var available = await db.Rooms.Where(x => x.Available).Take(2).ToListAsync(ct); room = available.Count == 1 ? available[0] : null; }
+                else room = RentalTelegram.SelectRoom(await db.Rooms.Where(x => x.Available).ToListAsync(ct), text);
                 if (room is null) { await Notify("Hãy chọn phòng: /phong rồi /dang ID_PHONG yêu cầu viết bài.", ct); break; }
                 var post = new RentalPost { RoomId = room.Id, TelegramUpdateId = updateId, Images = room.Listing.Images.ToList(), Content = await ai.Draft(room, text, ct) };
                 db.Posts.Add(post); await db.SaveChangesAsync(ct);
@@ -160,9 +172,14 @@ public class RentalWorker(
         await db.SaveChangesAsync(ct);
         try
         {
-            await facebook.Publish(group.Url, post.Content, post.Images);
+            delivery.PostUrl = await facebook.Publish(group.Url, post.Content, post.Images) ?? "";
+            delivery.SubmittedAt = DateTimeOffset.UtcNow;
+            delivery.LinkStatus = delivery.PostUrl.Length > 0 ? "Found" : "AwaitingLink";
+            delivery.LinkCheckedAt = DateTimeOffset.UtcNow;
+            delivery.MetricsRequested = delivery.PostUrl.Length > 0;
             delivery.Status = "Submitted";
-            delivery.Detail = "Đã bấm gửi. Cần kiểm tra bài trên nhóm; có thể đang chờ quản trị viên duyệt.";
+            delivery.PublicationNoticeRequested = true;
+            delivery.Detail = delivery.PostUrl.Length > 0 ? "Đã gửi và tự động lưu link bài Facebook." : "Đã gửi. Đang chờ link bài xuất hiện; hệ thống sẽ tự tìm lại, không đăng lại bài.";
         }
         catch (Exception ex)
         {
@@ -170,7 +187,85 @@ public class RentalWorker(
             state.Paused = true;
         }
         await db.SaveChangesAsync(ct);
-        await Notify($"Đăng nhóm {group.Name}: {delivery.Status}\n{delivery.Detail}", ct);
+        await Notify(delivery.Status == "Submitted"
+            ? $"ĐÃ GỬI BÀI — {await db.Rooms.Where(r => r.Id == post.RoomId).Select(r => r.Name).FirstOrDefaultAsync(ct)}\nNhóm: {group.Name}\n{delivery.Detail}\nBot sẽ báo lại khi xác minh mở được bài trên Facebook."
+            : $"CẦN KIỂM TRA — {group.Name}\n{delivery.Detail}", ct);
+    }
+
+    private async Task ResolveMissingLink(RentalDb db, CancellationToken ct)
+    {
+        var stale = DateTimeOffset.UtcNow.AddMinutes(-15);
+        var row = await db.Deliveries.Where(d => d.Status == "Submitted" && d.PostUrl == "" && (d.LinkCheckedAt == null || d.LinkCheckedAt < stale))
+            .OrderBy(d => d.LinkCheckedAt).ThenByDescending(d => d.SubmittedAt ?? d.CreatedAt).FirstOrDefaultAsync(ct);
+        if (row is null) return;
+        row.LinkCheckedAt = DateTimeOffset.UtcNow; row.LinkStatus = "Searching";
+        await db.SaveChangesAsync(ct);
+        try
+        {
+            var post = await db.Posts.FindAsync(new object[] { row.PostId }, ct);
+            var group = await db.Groups.FindAsync(new object[] { row.GroupId }, ct);
+            var url = post is null || group is null ? null : await facebook.RecoverPostLink(group.Url, post.Content, row.SubmittedAt ?? row.CreatedAt);
+            if (url is not null && !await db.Deliveries.AnyAsync(d => d.Id != row.Id && d.PostUrl == url, ct))
+            {
+                row.PostUrl = url; row.LinkStatus = "Found"; row.MetricsRequested = true;
+                row.Detail = "Đã tự động tìm và lưu link bài Facebook.";
+            }
+            else row.LinkStatus = "AwaitingLink";
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { row.LinkStatus = "RetryLater"; }
+        await db.SaveChangesAsync(ct);
+    }
+    private async Task SyncMetrics(RentalDb db, CancellationToken ct)
+    {
+        var stale = DateTimeOffset.UtcNow.AddSeconds(-Math.Max(60, o.MetricsIntervalSeconds));
+        var row = await db.Deliveries.Where(d => d.PostUrl != "" && d.PendingTelegramNotice == "" && (d.MetricsRequested || d.MetricsCheckedAt == null || d.MetricsCheckedAt < stale))
+            .OrderByDescending(d => d.MetricsRequested).ThenBy(d => d.MetricsCheckedAt).FirstOrDefaultAsync(ct);
+        if (row is null) return;
+        row.MetricsRequested = false;
+        row.MetricsCheckedAt = DateTimeOffset.UtcNow;
+        try
+        {
+            var before = new RentalMetrics(row.Reactions, row.Comments, row.Shares);
+            var counts = await facebook.ReadMetrics(row.PostUrl);
+            row.Reactions = counts.Reactions ?? row.Reactions; row.Comments = counts.Comments ?? row.Comments; row.Shares = counts.Shares ?? row.Shares;
+            row.MetricsError = counts.Reactions is null && counts.Comments is null && counts.Shares is null ? "Facebook chưa hiển thị số tương tác có thể đọc được." : "";
+            var post = await db.Posts.FindAsync(new object[] { row.PostId }, ct);
+            var room = post is null ? "Phòng cho thuê" : await db.Rooms.Where(r => r.Id == post.RoomId).Select(r => r.Name).FirstOrDefaultAsync(ct) ?? "Phòng cho thuê";
+            var group = await db.Groups.Where(g => g.Id == row.GroupId).Select(g => g.Name).FirstOrDefaultAsync(ct) ?? "Nhóm Facebook";
+            if (row.PublicationNoticeRequested && o.TelegramOwnerId > 0 && !string.IsNullOrWhiteSpace(o.TelegramToken))
+            {
+                row.PendingTelegramNotice = $"ĐÃ ĐĂNG XONG — {room}\nNhóm: {group}\nĐã xác minh mở được bài trên Facebook.\n{row.PostUrl}\nBot sẽ theo dõi và báo khi tổng tương tác tăng.";
+                row.TelegramNoticeKind = "Publication";
+            }
+            else if (o.TelegramOwnerId > 0 && !string.IsNullOrWhiteSpace(o.TelegramToken))
+            {
+                var notice = RentalTelegram.InteractionNotice(room, group, row.PostUrl, before, counts);
+                if (notice is not null) { row.PendingTelegramNotice = notice; row.TelegramNoticeKind = "Interaction"; }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        { row.MetricsError = "Chưa đọc được bài. Kiểm tra link, quyền xem bài và phiên đăng nhập Facebook."; }
+        await db.SaveChangesAsync(ct);
+    }
+
+    private async Task FlushTelegramNotice(RentalDb db, CancellationToken ct)
+    {
+        if (o.TelegramOwnerId <= 0 || string.IsNullOrWhiteSpace(o.TelegramToken) || DateTimeOffset.UtcNow < telegramNoticeRetryAt) return;
+        var thread = await db.Threads.Where(t => t.PendingTelegramNotice != "").OrderBy(t => t.LastCheckedAt).FirstOrDefaultAsync(ct);
+        if (thread is not null)
+        {
+            try { await Notify(thread.PendingTelegramNotice, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { telegramNoticeRetryAt = DateTimeOffset.UtcNow.AddSeconds(30); return; }
+            thread.PendingTelegramNotice = "";
+            await db.SaveChangesAsync(ct);
+        }
+        var row = await db.Deliveries.Where(d => d.PendingTelegramNotice != "").OrderBy(d => d.CreatedAt).FirstOrDefaultAsync(ct);
+        if (row is null) return;
+        try { await Notify(row.PendingTelegramNotice, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { telegramNoticeRetryAt = DateTimeOffset.UtcNow.AddSeconds(30); log.LogWarning("Telegram notice pending retry ({Type})", ex.GetType().Name); return; }
+        if (row.TelegramNoticeKind == "Publication") { row.PublicationNotifiedAt = DateTimeOffset.UtcNow; row.PublicationNoticeRequested = false; }
+        row.PendingTelegramNotice = ""; row.TelegramNoticeKind = "";
+        await db.SaveChangesAsync(ct);
     }
 
     private async Task Inbox(RentalDb db, CancellationToken ct)
@@ -185,13 +280,44 @@ public class RentalWorker(
         await db.SaveChangesAsync(ct);
         inboxInitialized = true;
         var rooms = await db.Rooms.Where(x => x.Available).ToListAsync(ct);
-        foreach (var thread in await db.Threads.Where(x => x.AutoReply).OrderBy(x => x.LastCheckedAt).Take(3).ToListAsync(ct))
+        var unread = discovered.Where(t => t.HasUnreadMessages).Select(t => t.Url).ToList();
+        var canReadMessages = !string.IsNullOrWhiteSpace(o.IncomingMessages) && !string.IsNullOrWhiteSpace(o.OutgoingMessages);
+        if (!canReadMessages && !messengerConfigurationWarningSent)
         {
-            if (await db.State.AsNoTracking().Select(x => x.Paused).SingleAsync(ct)) break;
+            try
+            {
+                await Notify("THEO DÕI MESSENGER\nChưa cấu hình IncomingMessages/OutgoingMessages để đọc chính xác tin khách. Hiện bot chỉ có thể báo hội thoại chưa đọc khi Facebook hiển thị dấu chưa đọc. Cần cấu hình nhận diện để nhận trích nội dung và từng tin mới.", ct);
+                messengerConfigurationWarningSent = true;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning("Messenger configuration notice could not be delivered ({Type})", ex.GetType().Name); }
+        }
+        foreach (var thread in await db.Threads.Where(x => x.AutoReply || x.NotifyIncoming).OrderByDescending(t => unread.Contains(t.Url) && !t.UnreadNoticeActive).ThenBy(x => x.LastCheckedAt).Take(5).ToListAsync(ct))
+        {
             try
             {
                 thread.LastCheckedAt = DateTimeOffset.UtcNow;
                 await db.SaveChangesAsync(ct);
+                if (!canReadMessages)
+                {
+                    var hasUnread = unread.Contains(thread.Url);
+                    if (thread.NotifyIncoming && hasUnread && !thread.UnreadNoticeActive && thread.PendingTelegramNotice.Length == 0)
+                        thread.PendingTelegramNotice = $"MESSENGER CÓ TIN CHƯA ĐỌC\n{thread.CustomerName}\nChưa đọc được chi tiết tin nhắn; mở hội thoại để xem:\n{thread.Url}";
+                    thread.UnreadNoticeActive = hasUnread;
+                    thread.LastError = "Thiếu IncomingMessages/OutgoingMessages. Chỉ báo dấu chưa đọc nếu Facebook hiển thị, chưa đọc được nội dung tin đến.";
+                    await db.SaveChangesAsync(ct);
+                    continue;
+                }
+                if (thread.NotifyIncoming && thread.PendingTelegramNotice.Length == 0)
+                {
+                    var incoming = await facebook.ReadIncomingMessages(thread.Url);
+                    var fresh = RentalTelegram.NewMessages(incoming, thread.LastNotifiedMessageId, thread.NotificationBaselineSet, thread.Status == "NewIncoming");
+                    thread.NotificationBaselineSet = true;
+                    thread.UnreadNoticeActive = unread.Contains(thread.Url);
+                    if (incoming.Count > 0) thread.LastNotifiedMessageId = incoming[^1].Id;
+                    if (fresh.Count > 0) thread.PendingTelegramNotice = RentalTelegram.IncomingNotice(thread.CustomerName, thread.Url, fresh);
+                    await db.SaveChangesAsync(ct);
+                }
+                if (!thread.AutoReply || await db.State.AsNoTracking().Select(x => x.Paused).SingleAsync(ct)) continue;
                 var message = await facebook.Read(thread.Url);
                 if (message is null || message.Id == thread.LastMessageId) continue;
                 if (thread.Status == "New")
@@ -237,10 +363,11 @@ public class RentalWorker(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                var wasAutoReply = thread.AutoReply;
                 thread.AutoReply = false; thread.Status = "NeedsReview";
-                thread.LastError = "Không thể xác minh/gửi tin nhắn. Kiểm tra trình duyệt trước khi bật lại.";
+                thread.LastError = "Chưa xác minh được tin đến. Kiểm tra phiên Messenger và IncomingMessages/OutgoingMessages/MessageIdAttribute.";
                 await db.SaveChangesAsync(ct);
-                await Notify($"Đã dừng tự trả lời {thread.CustomerName}. Cần kiểm tra trên web và Messenger.", ct);
+                if (wasAutoReply) await Notify($"Đã dừng tự trả lời {thread.CustomerName}. Cần kiểm tra trên web và Messenger.\n{thread.Url}", ct);
             }
         }
     }

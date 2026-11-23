@@ -121,7 +121,7 @@ public class RentalDesktopEngine(RentalLocalStore store, RentalAi ai, RentalFace
                 if (existing is not null) return $"Bản nháp đã tạo: {existing.Content}\n/duyet {existing.Id}";
                 RentalRoom? room = null;
                 if (parts[0] == "/dang" && parts.Length >= 2 && Guid.TryParse(parts[1], out var roomId)) room = data.Rooms.SingleOrDefault(r => r.Id == roomId && r.Available);
-                else { var rooms = data.Rooms.Where(r => r.Available).ToList(); if (rooms.Count == 1) room = rooms[0]; }
+                else room = RentalTelegram.SelectRoom(data.Rooms, text);
                 if (room is null) return "Dùng /phong để chọn phòng, sau đó /dang ID_PHONG yêu cầu.";
                 var post = await Draft(room.Id, text, updateId, ct);
                 return $"BẢN NHÁP ({Options.AiMode})\n\n{post.Content}\n\n/duyet {post.Id}";
@@ -156,8 +156,8 @@ public class RentalDesktopEngine(RentalLocalStore store, RentalAi ai, RentalFace
         store.Update(d => { d.Deliveries.Single(x => x.Id == delivery.Id).Status = "Sending"; d.State.LastPostAt = DateTimeOffset.UtcNow; return true; });
         try
         {
-            await facebook.Publish(group.Url, post.Content, post.Images);
-            store.Update(d => { var row = d.Deliveries.Single(x => x.Id == delivery.Id); row.Status = "Submitted"; row.Detail = "Đã bấm gửi. Kiểm tra bài có được nhóm duyệt không."; return true; });
+            var url = await facebook.Publish(group.Url, post.Content, post.Images);
+            store.Update(d => { var row = d.Deliveries.Single(x => x.Id == delivery.Id); row.Status = "Submitted"; row.PostUrl = url ?? ""; row.SubmittedAt = DateTimeOffset.UtcNow; row.LinkStatus = url is null ? "AwaitingLink" : "Found"; row.LinkCheckedAt = DateTimeOffset.UtcNow; row.Detail = url is null ? "Đã gửi; chờ link bài xuất hiện." : "Đã gửi và tự động lưu link bài."; return true; });
             await Notify($"Đã gửi bài vào {group.Name}. Kiểm tra trạng thái duyệt trên nhóm.", ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

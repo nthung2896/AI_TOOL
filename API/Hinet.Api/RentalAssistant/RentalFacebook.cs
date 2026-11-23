@@ -57,13 +57,16 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
         Status = "Ready";
         return p;
     }
-    public async Task Publish(string url, string content, IReadOnlyList<string>? images = null)
+    public async Task<string?> Publish(string url, string content, IReadOnlyList<string>? images = null)
     {
         if (!ValidUrl(url, true)) throw new InvalidOperationException("URL nhóm không hợp lệ.");
         var step = "mở trang nhóm";
         try
         {
             var p = await Navigate(url);
+            var priorLinks = (await p.Locator("a[href*='/groups/'], a[href*='story_fbid']")
+                .EvaluateAllAsync<string[]>("nodes => nodes.map(n => n.href)"))
+                .Where(RentalEngagement.ValidPostUrl).Select(RentalEngagement.Canonical).ToHashSet();
             step = "mở khung tạo bài";
             await p.Locator(options.Value.ComposeButton).First.ClickAsync();
             step = "tìm ô nhập nội dung";
@@ -82,11 +85,122 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
             }
             step = "bấm nút Đăng/Post";
             Status = "SubmittingPost";
-            await p.Locator(options.Value.PublishButton).ClickAsync();
-            Status = "Ready";
+            var result = await SubmitAndCapturePostLink(p, p.Locator(options.Value.PublishButton), url, content, priorLinks, value => Status = value);
+            Status = result is null ? "PostLinkPending" : "Ready";
+            return result;
         }
         catch (Exception ex) { Status = "PublishNeedsReview"; throw new RentalPublishException(step, ex); }
         // The caller records Submitted, never claims this is published/approved by the group.
+    }
+    public static async Task<string?> SubmitAndCapturePostLink(IPage p, ILocator button, string groupUrl, string content, ISet<string> priorLinks, Action<string>? state = null, TimeSpan? timeout = null)
+    {
+        var captured = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        async void CaptureCreatedStory(object? sender, IResponse response)
+        {
+            try
+            {
+                var host = new Uri(response.Url).Host;
+                if (!response.Ok || (host != "facebook.com" && !host.EndsWith(".facebook.com", StringComparison.OrdinalIgnoreCase)) ||
+                    !RentalPostLinks.IsCreationRequest(response.Request.PostData)) return;
+                var link = RentalPostLinks.FromCreationResponse(await response.TextAsync(), groupUrl);
+                if (link is not null) captured.TrySetResult(link);
+            }
+            catch (Exception) { /* Navigation can discard a response; DOM discovery remains available. */ }
+        }
+        p.Response += CaptureCreatedStory;
+        try
+        {
+            await button.ClickAsync();
+            state?.Invoke("FindingPostLink");
+            return await WaitForPostLink(p, groupUrl, content, priorLinks, captured.Task, timeout ?? TimeSpan.FromSeconds(35));
+        }
+        finally { p.Response -= CaptureCreatedStory; }
+    }
+    public static async Task<string?> FindPostLinkOnPage(IPage p, string groupUrl, string content, ISet<string>? excluded = null, DateTimeOffset? near = null)
+    {
+        var normalized = System.Text.RegularExpressions.Regex.Replace(content, @"\s+", " ").Trim();
+        if (normalized.Length < 5) return null;
+        var articles = p.Locator("[role=article]").Filter(new() { Visible = true });
+        var candidates = new HashSet<string>();
+        for (var i = 0; i < Math.Min(await articles.CountAsync(), 30); i++)
+        {
+            var article = articles.Nth(i);
+            var body = System.Text.RegularExpressions.Regex.Replace(await article.InnerTextAsync(new() { Timeout = 2000 }), @"\s+", " ");
+            if (!body.Contains(normalized[..Math.Min(normalized.Length, 90)], StringComparison.OrdinalIgnoreCase)) continue;
+            // A recovery scan must match the submission time too: repeated adverts must not be mixed up.
+            if (near.HasValue)
+            {
+                var times = await article.Locator("time[datetime], [data-utime]").EvaluateAllAsync<string[]>("nodes => nodes.map(n => n.getAttribute('datetime') || n.getAttribute('data-utime'))");
+                var timeMatches = times.Any(value => long.TryParse(value, out var seconds)
+                    ? seconds is > 0 and < 253402300800 && Math.Abs((DateTimeOffset.FromUnixTimeSeconds(seconds) - near.Value).TotalMinutes) <= 15
+                    : DateTimeOffset.TryParse(value, out var date) && Math.Abs((date - near.Value).TotalMinutes) <= 15);
+                if (!timeMatches) continue;
+            }
+            // Timestamp hrefs can be populated only on hover.
+            var timestamp = article.Locator("a:has(time), a:has(abbr), a[href*='multi_permalinks']").First;
+            if (await timestamp.CountAsync() > 0)
+                try { await timestamp.HoverAsync(new() { Timeout = 1500 }); } catch (Microsoft.Playwright.PlaywrightException) { } catch (TimeoutException) { }
+            var links = await article.Locator("a[href]").EvaluateAllAsync<string[]>("nodes => nodes.map(n => n.href)");
+            foreach (var href in links)
+            {
+                var link = RentalPostLinks.Normalize(href, groupUrl);
+                if (link is not null && RentalEngagement.BelongsToGroup(link, groupUrl) && (excluded is null || !excluded.Contains(link))) candidates.Add(link);
+            }
+        }
+        return candidates.Count == 1 ? candidates.Single() : null;
+    }
+    public static async Task<string?> WaitForPostLink(IPage p, string groupUrl, string content, ISet<string> excluded, Task<string>? responseLink, TimeSpan timeout)
+    {
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        while (timer.Elapsed < timeout)
+        {
+            if (responseLink?.IsCompletedSuccessfully == true) return await responseLink;
+            try
+            {
+                var url = await FindPostLinkOnPage(p, groupUrl, content, excluded);
+                if (url is not null) return url;
+            }
+            catch (Microsoft.Playwright.PlaywrightException) { }
+            catch (TimeoutException) { }
+            await Task.Delay(500);
+        }
+        return responseLink?.IsCompletedSuccessfully == true ? await responseLink : null;
+    }
+    public async Task<string?> RecoverPostLink(string groupUrl, string content, DateTimeOffset submittedAt)
+    {
+        if (!ValidUrl(groupUrl, true)) return null;
+        Status = "FindingPostLink";
+        try
+        {
+            var p = await Navigate(CanonicalUrl(groupUrl) + "/search/?q=" + Uri.EscapeDataString(content[..Math.Min(content.Length, 120)]));
+            try { await p.Locator("[role=article]").First.WaitForAsync(new() { Timeout = 10000 }); }
+            catch (TimeoutException) { return null; }
+            return await FindPostLinkOnPage(p, groupUrl, content, near: submittedAt);
+        }
+        finally { if (Status != "LoginRequired") Status = "Ready"; }
+    }
+    public async Task<RentalMetrics> ReadMetrics(string url)
+    {
+        if (!RentalEngagement.ValidPostUrl(url)) throw new ArgumentException("Cần link trực tiếp đến bài viết trong nhóm Facebook.");
+        var p = await Navigate(RentalEngagement.Canonical(url));
+        var actual = RentalPostLinks.Normalize(p.Url);
+        var expectedId = new Uri(RentalEngagement.Canonical(url)).AbsolutePath.Split('/').Last();
+        if (actual is null || new Uri(actual).AbsolutePath.Split('/').Last() != expectedId)
+            throw new InvalidOperationException("Facebook chưa mở đúng bài viết cần xác minh.");
+        var articles = p.Locator("[role=article]").Filter(new() { Visible = true });
+        await articles.First.WaitForAsync(new() { Timeout = 15000 });
+        var matching = articles.Filter(new() { Has = p.Locator("a[href*='" + new Uri(url).AbsolutePath.TrimEnd('/').Split('/').Last() + "']") });
+        var article = await matching.CountAsync() == 1 ? matching : null;
+        if (article is null) throw new InvalidOperationException("Không xác định duy nhất bài viết để đọc tương tác.");
+        var body = await article.InnerTextAsync();
+        if (System.Text.RegularExpressions.Regex.IsMatch(body, "pending approval|awaiting approval|chờ phê duyệt|đang chờ duyệt", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            throw new InvalidOperationException("Bài đang chờ nhóm duyệt.");
+        return await ReadVisibleMetrics(article);
+    }
+    public static async Task<RentalMetrics> ReadVisibleMetrics(ILocator article)
+    {
+        var labels = await article.Locator("[aria-label], a, [role=button]").EvaluateAllAsync<string[]>("nodes => nodes.filter(n => n.getClientRects().length).flatMap(n => [n.getAttribute('aria-label') || '', n.innerText || '']).filter(t => t && t.length < 150)");
+        return RentalEngagement.Parse(labels);
     }
     public static async Task AttachPhotos(IPage p, ILocator editor, string[] paths, Action<string>? progress = null)
     {
@@ -146,6 +260,32 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
         var transcript = string.Join("\n", history.TakeLast(20));
         return new(id, await last.InnerTextAsync(), transcript[..Math.Min(transcript.Length, 12000)]);
     }
+    public async Task<List<InboxMessage>> ReadIncomingMessages(string url)
+    {
+        if (!ValidUrl(url, false)) throw new InvalidOperationException("URL hội thoại không hợp lệ.");
+        var o = options.Value;
+        if (string.IsNullOrWhiteSpace(o.IncomingMessages) || string.IsNullOrWhiteSpace(o.OutgoingMessages))
+            throw new InvalidOperationException("Chưa cấu hình nhận diện tin đến/tin đi Messenger.");
+        return await ReadIncomingFromPage(await Navigate(url), o.IncomingMessages, o.OutgoingMessages, o.MessageIdAttribute);
+    }
+    public static async Task<List<InboxMessage>> ReadIncomingFromPage(IPage p, string incomingSelector, string outgoingSelector, string idAttribute)
+    {
+        var incoming = p.Locator(incomingSelector);
+        try { await incoming.First.WaitForAsync(new() { Timeout = 10000 }); }
+        catch (TimeoutException) { return new(); }
+        if (await incoming.EvaluateAllAsync<bool>("(nodes, outgoing) => nodes.some(n => n.matches(outgoing))", outgoingSelector))
+            throw new InvalidOperationException("Selector tin đến và tin đi bị trùng.");
+        var values = await incoming.EvaluateAllAsync<string[]>("(nodes, attribute) => nodes.slice(-50).map(n => JSON.stringify({id:n.getAttribute(attribute),text:n.innerText || ''}))", idAttribute);
+        var result = new List<InboxMessage>();
+        foreach (var value in values)
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(value);
+            var id = json.RootElement.GetProperty("id").GetString();
+            if (string.IsNullOrWhiteSpace(id) || id.Length > 250) throw new InvalidOperationException("Tin nhắn thiếu ID ổn định.");
+            result.Add(new(id, json.RootElement.GetProperty("text").GetString() ?? "", ""));
+        }
+        return result.DistinctBy(m => m.Id).ToList();
+    }
     public async Task Reply(string url, string expectedId, string reply)
     {
         // Re-read before sending: do not send a stale answer if a new message arrived.
@@ -171,10 +311,10 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
         try { await p.Locator("a[href*='/messages/t/']").First.WaitForAsync(new() { Timeout = 10000 }); }
         catch (TimeoutException) { return new(); }
         var links = await p.Locator("a[href*='/messages/t/']").EvaluateAllAsync<string[]>(
-            "nodes => nodes.map(n => JSON.stringify({url:n.href.split('?')[0],name:n.innerText}))");
+            "nodes => nodes.map(n => JSON.stringify({url:n.href.split('?')[0],name:n.innerText,unread:[n,...n.querySelectorAll('[aria-label]')].some(e=> /unread message|tin nhắn chưa đọc/i.test(e.getAttribute('aria-label') || '')) ? 'yes' : 'no'}))");
         return links.Select(x => System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(x)!)
             .Where(x => ValidUrl(x["url"], false)).DistinctBy(x => CanonicalUrl(x["url"])).Take(30)
-            .Select(x => new RentalThread { Url = CanonicalUrl(x["url"]), CustomerName = x["name"][..Math.Min(x["name"].Length, 150)], AutoReply = options.Value.AutoReplyNewConversations }).ToList();
+            .Select(x => new RentalThread { Url = CanonicalUrl(x["url"]), CustomerName = x["name"][..Math.Min(x["name"].Length, 150)], AutoReply = options.Value.AutoReplyNewConversations, HasUnreadMessages = x["unread"] == "yes" }).ToList();
     }
     public async Task<object> CheckSelectors(string url)
     {

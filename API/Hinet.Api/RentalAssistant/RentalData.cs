@@ -19,6 +19,7 @@ public class RentalOptions
     public string ProfilePath { get; set; } = "App_Data/facebook-profile";
     public int PostIntervalSeconds { get; set; } = 300;
     public int InboxIntervalSeconds { get; set; } = 60;
+    public int MetricsIntervalSeconds { get; set; } = 180;
     // Selectors are deliberately configurable: Facebook changes markup and language.
     public string ComposeButton { get; set; } = "[role=button]:has-text('Write something'), [role=button]:has-text('Bạn viết gì đi')";
     public string PostEditor { get; set; } = "[role=dialog] [contenteditable=true][role=textbox]";
@@ -58,6 +59,12 @@ public class RentalGroup
 }
 public class RentalThread
 {
+    public bool NotifyIncoming { get; set; } = true;
+    public bool NotificationBaselineSet { get; set; }
+    public bool UnreadNoticeActive { get; set; }
+    public string LastNotifiedMessageId { get; set; } = "";
+    public string PendingTelegramNotice { get; set; } = "";
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped] public bool HasUnreadMessages { get; set; }
     public Guid Id { get; set; } = Guid.NewGuid();
     [Required, MaxLength(150)] public string CustomerName { get; set; } = "";
     [Required, MaxLength(400)] public string Url { get; set; } = "";
@@ -81,6 +88,20 @@ public class RentalPost
 }
 public class RentalDelivery
 {
+    public bool PublicationNoticeRequested { get; set; }
+    public DateTimeOffset? PublicationNotifiedAt { get; set; }
+    public string PendingTelegramNotice { get; set; } = "";
+    [MaxLength(30)] public string TelegramNoticeKind { get; set; } = "";
+    [MaxLength(500)] public string PostUrl { get; set; } = "";
+    [MaxLength(40)] public string LinkStatus { get; set; } = "AwaitingLink";
+    public DateTimeOffset? LinkCheckedAt { get; set; }
+    public int? Reactions { get; set; }
+    public int? Comments { get; set; }
+    public int? Shares { get; set; }
+    public DateTimeOffset? SubmittedAt { get; set; }
+    public DateTimeOffset? MetricsCheckedAt { get; set; }
+    public bool MetricsRequested { get; set; }
+    public string MetricsError { get; set; } = "";
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid PostId { get; set; }
     public Guid GroupId { get; set; }
