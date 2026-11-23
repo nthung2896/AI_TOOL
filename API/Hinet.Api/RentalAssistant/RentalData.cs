@@ -6,6 +6,10 @@ namespace Hinet.Api;
 
 public class RentalOptions
 {
+    public string Schema { get; set; } = "rental";
+    public string? MessengerSettingsPath { get; set; }
+    public bool Headless { get; set; }
+    public DateTimeOffset? AccountExpiresAt { get; set; }
     public string AiMode { get; set; } = "api";
     public bool Enabled { get; set; }
     public string ManagementKey { get; set; } = "";
@@ -133,6 +137,7 @@ public class RentalState
 }
 public class RentalDb(DbContextOptions<RentalDb> options) : DbContext(options)
 {
+    public string Schema { get; init; } = "rental";
     public DbSet<RentalRoom> Rooms => Set<RentalRoom>();
     public DbSet<RentalGroup> Groups => Set<RentalGroup>();
     public DbSet<RentalThread> Threads => Set<RentalThread>();
@@ -142,7 +147,7 @@ public class RentalDb(DbContextOptions<RentalDb> options) : DbContext(options)
     public DbSet<RentalState> State => Set<RentalState>();
     protected override void OnModelCreating(ModelBuilder b)
     {
-        b.HasDefaultSchema("rental");
+        b.HasDefaultSchema(Schema);
         b.Entity<RentalRoom>().Property(x => x.MonthlyRent).HasPrecision(18, 0);
         var listing = b.Entity<RentalRoom>().Property(x => x.Listing)
             .HasConversion(v => RentalListing.Serialize(v), v => RentalListing.Deserialize(v)).HasDefaultValueSql("N'{}'");
@@ -184,7 +189,7 @@ public static class RentalBootstrap
         services.AddSingleton<RentalFacebook>();
         services.AddSingleton(sp => new RentalMedia(Path.Combine(sp.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "rental-images")));
         services.AddHostedService<RentalSchemaUpgrade>();
-        services.AddHostedService<RentalWorker>();
+        services.AddRentalTenancy(config);
         return services;
     }
     public static async Task InitializeAsync(IServiceProvider services)
@@ -213,7 +218,7 @@ public static class RentalBootstrap
             await transaction.CommitAsync();
         }
         await RentalSchemaUpgrade.ExecuteLiteralAsync(db, RentalSchemaUpgrade.Sql);
-        if (!await db.State.AnyAsync()) { db.State.Add(new RentalState()); await db.SaveChangesAsync(); }
+        if (!await db.State.AnyAsync()) { db.State.Add(new RentalState { Id = 0 }); await db.SaveChangesAsync(); }
         Console.WriteLine("AI_TOOL: rental schema ready. Existing application migrations were not run.");
     }
 }

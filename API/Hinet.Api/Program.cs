@@ -161,6 +161,7 @@ internal class Program
         app.UseStaticFiles();
 
         app.UseAuthentication();
+        app.UseMiddleware<RentalTenantMiddleware>();
         app.UseAuthorization();
         app.UseRateLimiter();
 

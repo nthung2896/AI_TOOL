@@ -14,6 +14,36 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
     private IBrowserContext? context;
     private IPage? page;
     public string Status { get; private set; } = "NotStarted";
+    private readonly SemaphoreSlim operationGate = new(1);
+    private DateTimeOffset remoteUntil;
+    public bool RemoteLoginActive => remoteUntil > DateTimeOffset.UtcNow;
+    private sealed class Release(SemaphoreSlim semaphore) : IDisposable { public void Dispose() => semaphore.Release(); }
+    public async Task<IDisposable> Acquire(CancellationToken ct = default) { await operationGate.WaitAsync(ct); return new Release(operationGate); }
+    public async Task BeginRemoteLogin()
+    {
+        using var lease = await Acquire();
+        remoteUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+        var p = await Page();
+        await p.SetViewportSizeAsync(1100, 760);
+        await p.GotoAsync("https://www.facebook.com/", new() { WaitUntil = WaitUntilState.DOMContentLoaded });
+    }
+    public async Task<byte[]> RemoteScreen()
+    {
+        using var lease = await Acquire();
+        if (!RemoteLoginActive || page is null) throw new ArgumentException("Phiên đăng nhập đã kết thúc.");
+        return await page.ScreenshotAsync(new() { Type = ScreenshotType.Jpeg, Quality = 75 });
+    }
+    public async Task RemoteInput(string kind, int x, int y, string text)
+    {
+        using var lease = await Acquire();
+        if (!RemoteLoginActive || page is null) throw new ArgumentException();
+        if (kind == "click" && x >= 0 && x < 1100 && y >= 0 && y < 760) await page.Mouse.ClickAsync(x, y);
+        else if (kind == "text") await page.Keyboard.InsertTextAsync(text);
+        else if (kind == "key" && new[] { "Tab", "Enter", "Backspace", "Control+A", "Escape", "ArrowDown", "ArrowUp" }.Contains(text)) await page.Keyboard.PressAsync(text);
+        else if (kind == "scroll") await page.Mouse.WheelAsync(0, Math.Clamp(y, -650, 650));
+        else throw new ArgumentException();
+    }
+    public void EndRemoteLogin() => remoteUntil = DateTimeOffset.MinValue;
 
     private async Task<IPage> Page()
     {
@@ -21,7 +51,14 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
         if (page is not null && !page.IsClosed) return page;
         playwright ??= await Playwright.CreateAsync();
         context = await playwright.Chromium.LaunchPersistentContextAsync(
-            Path.GetFullPath(options.Value.ProfilePath), new() { Headless = false, Locale = "vi-VN" });
+            Path.GetFullPath(options.Value.ProfilePath), new() { Headless = options.Value.Headless, Locale = "vi-VN", ServiceWorkers = ServiceWorkerPolicy.Block });
+        if (options.Value.Headless)
+            await context.RouteAsync("**/*", async route =>
+            {
+                var allowed = Uri.TryCreate(route.Request.Url, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&
+                    new[] { "facebook.com", "facebook.net", "fbcdn.net", "fbsbx.com", "google.com", "gstatic.com" }.Any(domain => uri.Host == domain || uri.Host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase));
+                if (allowed) await route.ContinueAsync(); else await route.AbortAsync();
+            });
         context.SetDefaultTimeout(15000);
         page = await context.NewPageAsync();
         await page.GotoAsync("https://www.facebook.com/", new() { WaitUntil = WaitUntilState.DOMContentLoaded });

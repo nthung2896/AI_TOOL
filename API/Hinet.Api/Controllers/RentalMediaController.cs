@@ -4,13 +4,14 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Hinet.Controllers;
 
-[ApiController, AllowAnonymous, Route("rental-media")]
-public class RentalMediaController(RentalMedia media) : ControllerBase
+[ApiController, Authorize, Route("rental-media")]
+public class RentalMediaController(RentalRequestRuntime runtime) : ControllerBase
 {
     [HttpGet("{id}")]
     public IActionResult Image(string id)
     {
-        try { return PhysicalFile(Path.GetFullPath(media.Resolve(id)), RentalMedia.ContentType(id)); }
+        Response.Headers.CacheControl = "private, no-store";
+        try { return PhysicalFile(Path.GetFullPath(runtime.Value.Media.Resolve(id)), RentalMedia.ContentType(id)); }
         catch (ArgumentException) { return NotFound(); }
     }
 }

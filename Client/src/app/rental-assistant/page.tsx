@@ -8,6 +8,7 @@ import PostingQueueCard from "./PostingQueueCard";
 import GroupManager, { RentalGroup } from "./GroupManager";
 import MessengerSetupCard from "./MessengerSetupCard";
 import OverviewDashboard, { TrackedDelivery } from "./OverviewDashboard";
+import CustomerSettings, { CustomerAccount, accountApi, accountBase } from "./CustomerSettings";
 
 type Group = RentalGroup;
 type Thread = { id: string; customerName: string; url: string; autoReply: boolean; status: string; lastError: string; lastReply: string };
@@ -22,11 +23,15 @@ const labels: Record<string, string> = { Draft: "Bản nháp", Approved: "Đã d
 
 export default function RentalAssistantPage({ embedded = false }: { embedded?: boolean }) {
   const [key, setKey] = useState("");
+  const [userName, setUserName] = useState("");
+  const [password, setPassword] = useState("");
+  const [account, setAccount] = useState<CustomerAccount | null>(null);
   const [connected, setConnected] = useState(false);
   const [restoreSession, setRestoreSession] = useState(false);
   useEffect(() => {
     try {
-      const saved = sessionStorage.getItem("rental-management-key");
+      sessionStorage.removeItem("rental-management-key");
+      const saved = sessionStorage.getItem("rental-access-token") || localStorage.getItem("AccessToken");
       if (saved) { setKey(saved); setRestoreSession(true); }
     } catch { /* Storage may be unavailable in a restricted browser. */ }
   }, []);
@@ -35,7 +40,7 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState("overview");
   useEffect(() => {
-    const syncTab = () => { const next = window.location.hash.slice(1); setTab(["overview", "rooms", "posts", "groups", "threads", "appointments"].includes(next) ? next : "overview"); };
+    const syncTab = () => { const next = window.location.hash.slice(1); setTab(["overview", "rooms", "posts", "groups", "threads", "appointments", "settings"].includes(next) ? next : "overview"); };
     syncTab(); window.addEventListener("hashchange", syncTab);
     return () => window.removeEventListener("hashchange", syncTab);
   }, []);
@@ -46,14 +51,14 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
   const api = useCallback(async (path: string, method = "GET", body?: unknown) => {
     const base = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5111").replace(/\/$/, "");
     const result = await fetch(`${base}/api/rental-assistant/${path}`, {
-      method, headers: body instanceof FormData ? { "X-Rental-Key": key } : { "X-Rental-Key": key, "Content-Type": "application/json" },
+      method, credentials: "include", headers: body instanceof FormData ? { Authorization: `Bearer ${key}` } : { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body), cache: "no-store",
     });
     if (!result.ok) {
       if (result.status === 401) {
-        try { sessionStorage.removeItem("rental-management-key"); } catch { }
+        try { sessionStorage.removeItem("rental-access-token"); localStorage.removeItem("AccessToken"); } catch { }
         setConnected(false);
-        throw new Error("Khóa quản lý chưa đúng hoặc chưa được cấu hình.");
+        throw new Error("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
       }
       const text = await result.text();
       throw new Error(result.status >= 500 ? "API chưa sẵn sàng. Kiểm tra kết nối SQL Server và chạy khởi tạo database." : text || `Lỗi ${result.status}`);
@@ -63,7 +68,8 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
   }, [key]);
   const refresh = useCallback(async () => {
     const next = await api("overview"); setData(next); setConnected(true);
-    try { sessionStorage.setItem("rental-management-key", key); } catch { }
+    try { sessionStorage.setItem("rental-access-token", key); } catch { }
+    setAccount(await accountApi("me"));
   }, [api, key]);
   useEffect(() => {
     if (!restoreSession) return;
@@ -75,8 +81,8 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
     return () => { cancelled = true; };
   }, [restoreSession, refresh]);
   const lock = () => {
-    try { sessionStorage.removeItem("rental-management-key"); } catch { }
-    setRestoreSession(false); setConnected(false); setData(null); setKey("");
+    try { sessionStorage.removeItem("rental-access-token"); localStorage.removeItem("AccessToken"); } catch { }
+    setRestoreSession(false); setConnected(false); setData(null); setAccount(null); setKey("");
   };
   async function action(work: () => Promise<unknown>) {
     setBusy(true); setError("");
@@ -92,13 +98,21 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
   const roomName = (id: string) => data?.rooms.find(r => r.id === id)?.name || id;
   const badge = (status: string) => <span className={`ra-badge ${status === "NeedsReview" ? "ra-danger" : ""}`}>{labels[status] || status}</span>;
 
-  if (!connected || !data) return <main className={"ra-login" + (embedded ? " ra-embedded" : "")}><form className="ra-connect" onSubmit={e => submit(e, refresh)}>
+  async function login() {
+    const response = await fetch(`${accountBase()}/api/Account/Login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userName, password }) });
+    const result = await response.json();
+    if (!response.ok || !result.status || !result.data?.token) throw new Error("Tên đăng nhập hoặc mật khẩu không đúng, hoặc tài khoản đang bị khóa.");
+    sessionStorage.setItem("rental-access-token", result.data.token);
+    setKey(result.data.token); setPassword(""); setRestoreSession(true);
+  }
+  if (!connected || !data) return <main className={"ra-login" + (embedded ? " ra-embedded" : "")}><form className="ra-connect" onSubmit={async e => { e.preventDefault(); setBusy(true); setError(""); try { await login(); } catch (err) { setError(err instanceof Error ? err.message : "Không đăng nhập được."); } finally { setBusy(false); } }}>
     <span className="ra-brand">AI TOOL / RENTAL DESK</span><h1>Trợ lý nhà trọ</h1>
     <p>Điều khiển qua Telegram. Theo dõi phòng, bài đăng, khách và lịch xem ở một nơi.</p>
-    <label>Khóa quản lý<input required type="password" minLength={32} autoComplete="off" value={key} onChange={e => setKey(e.target.value)} placeholder="RentalAssistant:ManagementKey" /></label>
+    <label>Tên đăng nhập<input required autoComplete="username" value={userName} onChange={e => setUserName(e.target.value)} placeholder="Tài khoản được cấp" /></label>
+    <label>Mật khẩu<input required type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} /></label>
     <button disabled={busy}>{busy ? "Đang kết nối…" : "Mở bảng điều khiển"}</button>
     {error && <p role="alert" className="ra-error">{error}</p>}
-    <small>Phiên được giữ trong tab này khi tải lại trang. Đóng tab hoặc bấm Khóa bảng điều khiển để kết thúc phiên.</small>
+    <small>Mỗi tài khoản có dữ liệu và phiên Facebook riêng. Liên hệ quản trị viên để được cấp tài khoản hoặc gia hạn.</small>
   </form></main>;
 
   return <main className={"ra-app" + (embedded ? " ra-embedded" : "") + (tab === "overview" ? " ra-overview" : "")}>
@@ -110,7 +124,8 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
     <section className="ra-main"><header className="ra-header"><div><span className="ra-eyebrow">KHÔNG GIAN LÀM VIỆC</span><h1>{({ overview: "Hôm nay có gì?", rooms: "Quản lý phòng trọ", posts: "Nội dung & lượt đăng", groups: "Nhóm Facebook", threads: "Khách & Messenger", appointments: "Lịch xem phòng" } as Record<string, string>)[tab]}</h1></div>
       <button disabled={busy} className={data.state.paused ? "" : "ra-secondary"} onClick={() => action(() => api("state", "PUT", { paused: !data.state.paused }))}>{data.state.paused ? "Bật trợ lý" : "Tạm dừng trợ lý"}</button></header>
       {error && <div role="alert" className="ra-error">{error}</div>}
-      <div className="ra-statusbar"><span className={`ra-dot ${data.state.paused || !data.enabled ? "paused" : ""}`} />{!data.enabled ? "Worker chưa bật trong cấu hình" : data.state.paused ? "Trợ lý đang tạm dừng" : "Trợ lý đang hoạt động"}<span>Facebook: {browserLabels[data.browser] || data.browser}</span><button className="ra-link" disabled={busy} onClick={() => action(refresh)}>Làm mới</button>{embedded && <button className="ra-link" disabled={busy} onClick={lock}>Khóa bảng điều khiển</button>}</div>
+      <div className="ra-statusbar"><span className={`ra-dot ${data.state.paused || !data.enabled ? "paused" : ""}`} />{!data.enabled ? "Worker chưa bật trong cấu hình" : data.state.paused ? "Trợ lý đang tạm dừng" : "Trợ lý đang hoạt động"}<span>Facebook: {browserLabels[data.browser] || data.browser}</span><button className="ra-link" disabled={busy} onClick={() => action(refresh)}>Làm mới</button><button className="ra-link" onClick={() => { setTab("settings"); window.location.hash = "settings"; }}>{account?.isOwner ? "Tài khoản & khách thuê" : "Cấu hình của tôi"}</button>{embedded && <button className="ra-link" disabled={busy} onClick={lock}>Đăng xuất</button>}</div>
+      {tab === "settings" && account && <CustomerSettings account={account} onSaved={() => void refresh()} />}
 
       {(tab === "overview" || tab === "posts") && <PostingQueueCard api={api} onNextDelivery={setNextDeliveryId} />}
       {tab === "overview" && <OverviewDashboard data={data} busy={busy} api={api} action={action} />}

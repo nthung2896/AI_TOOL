@@ -13,7 +13,7 @@ public sealed class RentalMessengerSetup(IWebHostEnvironment environment, IOptio
     private string state = "Idle", message = "", url = "";
     private bool cancel;
     private DateTimeOffset started;
-    public string SettingsPath => Path.Combine(environment.ContentRootPath, "App_Data", "messenger-selectors.json");
+    public string SettingsPath => options.Value.MessengerSettingsPath ?? Path.Combine(environment.ContentRootPath, "App_Data", "messenger-selectors.json");
     public bool Configured => !string.IsNullOrWhiteSpace(options.Value.IncomingMessages) && !string.IsNullOrWhiteSpace(options.Value.OutgoingMessages);
     public MessengerSetupSnapshot Snapshot() { lock (gate) return new(state, message, Configured); }
     public void Start(string target)

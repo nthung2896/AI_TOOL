@@ -19,6 +19,7 @@ public class RentalWorker(
     private DateTimeOffset telegramNoticeRetryAt;
     private bool messengerConfigurationWarningSent;
     private bool messengerSetupReported;
+    private string LeaseName => o.Schema == "rental" ? "AI_TOOL.RentalWorker" : "AI_TOOL.RentalWorker." + o.Schema;
     public static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -32,7 +33,8 @@ public class RentalWorker(
         {
             await lease.Database.OpenConnectionAsync(ct);
             using var command = lease.Database.GetDbConnection().CreateCommand();
-            command.CommandText = "DECLARE @result int; EXEC @result = sys.sp_getapplock @Resource=N'AI_TOOL.RentalWorker', @LockMode='Exclusive', @LockOwner='Session', @LockTimeout=0; SELECT @result;";
+            command.CommandText = "DECLARE @result int; EXEC @result = sys.sp_getapplock @Resource=@resource, @LockMode='Exclusive', @LockOwner='Session', @LockTimeout=0; SELECT @result;";
+            var resource = command.CreateParameter(); resource.ParameterName = "@resource"; resource.Value = LeaseName; command.Parameters.Add(resource);
             var result = Convert.ToInt32(await command.ExecuteScalarAsync(ct));
             if (result < 0) { log.LogError("Another rental worker owns this database. This instance will not run."); return; }
         }
@@ -43,8 +45,12 @@ public class RentalWorker(
         {
             try
             {
+                if (o.AccountExpiresAt <= DateTimeOffset.UtcNow) return;
+                using var browserLease = await facebook.Acquire(ct);
+                if (facebook.RemoteLoginActive) { await Task.Delay(1000, ct); continue; }
                 using var heartbeat = lease.Database.GetDbConnection().CreateCommand();
-                heartbeat.CommandText = "SELECT APPLOCK_MODE('public', 'AI_TOOL.RentalWorker', 'Session')";
+                heartbeat.CommandText = "SELECT APPLOCK_MODE('public', @resource, 'Session')";
+                var resource = heartbeat.CreateParameter(); resource.ParameterName = "@resource"; resource.Value = LeaseName; heartbeat.Parameters.Add(resource);
                 if (await heartbeat.ExecuteScalarAsync(ct) as string != "Exclusive")
                 { log.LogError("Rental worker lease lost. Restart is required."); return; }
                 await using var db = await factory.CreateDbContextAsync(ct);

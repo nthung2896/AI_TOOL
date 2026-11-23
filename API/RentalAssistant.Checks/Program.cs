@@ -16,6 +16,8 @@ int checks = 0;
 void Check(bool pass, string name) { if (!pass) throw new Exception("FAILED: " + name); checks++; Console.WriteLine("PASS: " + name); }
 if (args.Contains("--messenger-setup-only")) { await MessengerSetupChecks.Run(Check); return; }
 if (args.Contains("--photo-upload-only")) { await PhotoUploadChecks.Run(Check); return; }
+if (args.Contains("--saas-integration")) { await SaasChecks.Integration(Check); return; }
+SaasChecks.Run(Check);
 SqlServerChecks.Run(Check);
 EngagementChecks.Run(Check);
 if (args.Contains("--sqlserver-only")) return;
@@ -36,7 +38,7 @@ ActionExecutingContext Auth(string key)
 }
 Check(Auth("").Result is UnauthorizedResult, "missing management key rejected");
 Check(Auth(new string('x', 32)).Result is UnauthorizedResult, "wrong management key rejected");
-Check(Auth(new string('k', 32)).Result is null, "correct management key accepted");
+Check(Auth(new string('k', 32)).Result is UnauthorizedResult, "legacy management key cannot bypass customer login");
 
 using var db = new RentalDb(new DbContextOptionsBuilder<RentalDb>().UseSqlServer("Server=localhost;Database=AI_TOOL;Integrated Security=true").Options);
 var script = db.Database.GenerateCreateScript();

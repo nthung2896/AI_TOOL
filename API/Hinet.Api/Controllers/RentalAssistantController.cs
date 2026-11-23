@@ -14,17 +14,22 @@ public sealed class RentalAccessAttribute : ActionFilterAttribute
 {
     public override void OnActionExecuting(ActionExecutingContext context)
     {
-        var key = context.HttpContext.RequestServices.GetRequiredService<IOptions<RentalOptions>>().Value.ManagementKey;
-        var supplied = context.HttpContext.Request.Headers["X-Rental-Key"].ToString();
-        if (key.Length < 32 || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(key)), SHA256.HashData(Encoding.UTF8.GetBytes(supplied))))
+        if (context.HttpContext.User.Identity?.IsAuthenticated != true || !context.HttpContext.Items.ContainsKey("RentalRuntime"))
             context.Result = new UnauthorizedResult();
     }
 }
 
-[ApiController, AllowAnonymous, RentalAccess, Route("api/rental-assistant")]
+[ApiController, Authorize, RentalAccess, Route("api/rental-assistant")]
 public class RentalAssistantController(
-    RentalDb db, RentalAi ai, RentalFacebook browser, IOptions<RentalOptions> options, RentalMedia media, RentalMessengerSetup messengerSetup, RentalGroupDiscovery groupDiscovery, RentalWorkerStatus workerStatus) : ControllerBase
+    RentalDb db, RentalRequestRuntime requestRuntime) : ControllerBase
 {
+    private RentalAi ai => requestRuntime.Value.Ai;
+    private RentalFacebook browser => requestRuntime.Value.Browser;
+    private IOptions<RentalOptions> options => Options.Create(requestRuntime.Value.Options);
+    private RentalMedia media => requestRuntime.Value.Media;
+    private RentalMessengerSetup messengerSetup => requestRuntime.Value.Messenger;
+    private RentalGroupDiscovery groupDiscovery => requestRuntime.Value.Discovery;
+    private RentalWorkerStatus workerStatus => requestRuntime.Value.Status;
     private Task<PostingQueueSnapshot> ReadQueue(CancellationToken ct) => RentalPostingQueue.Read(db, options.Value, workerStatus, ct,
         messengerSetup.Snapshot().State is "Queued" or "Running" ? "messengerSetup" : groupDiscovery.Snapshot().State is "Queued" or "Running" ? "groupSearch" : null);
     [HttpGet("posting/queue")]
