@@ -113,6 +113,18 @@ Khi gửi Facebook, worker tải ảnh lên khung soạn bài trước khi bấm
 
 ## Lệnh Telegram
 
+### Theo dõi bài và tương tác trên dashboard
+
+Trang Tổng quan có biểu đồ hoạt động 7/14/30 ngày, phân bổ trạng thái và số cảm xúc/bình luận/chia sẻ. Dữ liệu tổng hợp từ tối đa 100 bài, 200 lượt gửi gần nhất; dấu `—` nghĩa là chưa đọc được số liệu, không phải 0. Biểu đồ hoạt động dùng ngày tạo lượt gửi theo giờ Việt Nam.
+
+Sau khi gửi, worker tự lấy link từ phản hồi tạo bài của Facebook và chờ tối đa khoảng 35 giây cho bài xuất hiện trên bảng tin. Hỗ trợ link `/posts/ID`, `/permalink/ID`, `pfbid` và timestamp `multi_permalinks`. Link được lưu cùng lượt gửi và tự xếp hàng đọc tương tác. Nếu chưa có link (ví dụ bài chờ nhóm duyệt), trạng thái giữ **Đã gửi · chờ link**, không tự gửi lại bài.
+
+Các lượt đã gửi còn thiếu link được tự tìm lại khoảng 15 phút/lần qua tìm kiếm nhóm, đối chiếu nội dung và thời gian gửi để tránh nhầm bài trùng nội dung. Có thể nhấn **Tìm lại link** hoặc **Đồng bộ tương tác** để xếp hàng kiểm tra ngay. Nếu không đủ dữ liệu để xác định duy nhất bài, ứng dụng tiếp tục chờ thay vì gắn bừa link. Nhập tay chỉ nằm trong **Tùy chọn → Nhập link dự phòng**, không còn là bước bắt buộc.
+
+**Lưu & đồng bộ** hoặc **Đồng bộ tương tác** xếp hàng đọc số liệu; worker sử dụng cùng cửa sổ Chromium để xử lý tuần tự, không thao tác trình duyệt song song với đăng bài. Worker và BrowserEnabled cần bật, phiên Facebook cần có quyền xem bài. Telegram là tùy chọn cho các tác vụ điều khiển qua web. Các link đã kiểm tra được đọc lại khoảng 3 phút/lần. Nếu phiên đăng nhập hết hạn hoặc Facebook thay đổi giao diện/ẩn số đếm, dashboard báo chưa đọc được thay vì tạo số liệu giả. Cảm xúc là tổng phản ứng đang hiển thị, có thể được Facebook làm tròn.
+
+Khởi động lại API sau khi cập nhật để thêm các cột theo dõi vào `rental.Deliveries`. Không có thao tác tự động đăng lại các lượt gửi cũ.
+
 Kiểm tra backend không cần Facebook/Telegram thật:
 
 ```powershell
@@ -124,6 +136,7 @@ Bộ kiểm tra dùng HTTP giả lập cho AI, kiểm tra xác thực khóa qu�
 - `/help`: hướng dẫn.
 - `/phong`: phòng còn trống và ID.
 - `/dang ID_PHONG yêu cầu`: tạo bản nháp, chưa đăng.
+- `/dang Ngõ 1 Bùi Xương Trạch Viết tin cho thuê phòng`: chọn theo đúng tên phòng (có thể gõ không dấu), tạo bản nháp. Nếu tên trùng hoặc nhắc nhiều phòng, bot yêu cầu chọn ID từ `/phong`.
 - Gõ yêu cầu bình thường: tạo bản nháp khi chỉ có một phòng còn trống.
 - `/duyet ID_BAI`: xếp hàng một lượt cho mỗi nhóm đang bật.
 - `/timnhom từ khóa`: tìm nhóm, lưu kết quả ở trạng thái chưa chọn; vào web chọn nhóm và kiểm tra quy định.
@@ -138,7 +151,29 @@ AI đề xuất lịch dựa trên hội thoại và phòng còn trống. Hệ t
 
 Lịch được ghi trước khi gửi xác nhận Messenger, rồi thông báo Telegram. Nếu gửi Messenger bị lỗi, lịch đã lưu vẫn hiển thị trên web, hội thoại chuyển `NeedsReview`; cần kiểm tra thủ công. Chưa có kiểm tra trùng giờ giữa khách hoặc hủy/đổi lịch tự động.
 
-Hệ thống lưu ID tin cuối trước khi gửi, có unique index cho cặp bài/nhóm và lịch theo tin xác nhận. Nếu mất kết nối sau thao tác gửi hoặc tiến trình bị dừng, tác vụ chuyển `NeedsReview`, không tự gửi lại. Thông báo Telegram chưa có outbox giao nhận riêng; nếu thông báo lỗi, xem kết quả trên web.
+Hệ thống lưu ID tin cuối trước khi gửi, có unique index cho cặp bài/nhóm và lịch theo tin xác nhận. Nếu mất kết nối sau thao tác gửi hoặc tiến trình bị dừng, tác vụ chuyển `NeedsReview`, không tự gửi lại. Thông báo xác minh đăng xong và tương tác có hàng đợi lưu trong database; các phản hồi lệnh Telegram thông thường vẫn dùng gửi trực tiếp.
+
+### Điều khiển từ điện thoại và nhận thông báo
+
+Máy chạy API và Chromium cần được bật, có mạng, Facebook đã đăng nhập; không cần điện thoại ở cùng mạng. Nhắn bot `/dang Ngõ 1 Bùi Xương Trạch Viết bài cho thuê phòng, nhấn mạnh vị trí và nội thất`. Đọc bản nháp, gửi `/duyet ID_BAI` mà bot trả về, rồi `/chay` nếu trợ lý đang tạm dừng.
+
+Bot báo **ĐÃ GỬI BÀI** sau thao tác gửi. Khi xác minh mở được link bài và không thấy dấu hiệu chờ duyệt, bot báo **ĐÃ ĐĂNG XONG** kèm tên phòng, nhóm và URL. Bài chờ duyệt/chưa truy cập được không bị báo đăng xong sớm.
+
+Số cảm xúc, bình luận, chia sẻ được kiểm tra định kỳ, mặc định khoảng 3 phút (`RentalAssistant:MetricsIntervalSeconds`, tối thiểu 60 giây). Lần đọc đầu làm mốc; những lần sau có tổng tăng, bot gửi một thông báo gộp số tăng và link bài. Đây là thay đổi tổng số đếm Facebook hiển thị, không xác định danh tính người thả tim và không phải thông báo tức thời. Thông báo thành công/tương tác được lưu hàng đợi trong database và thử lại khi Telegram lỗi; một sự cố đúng lúc Telegram đã nhận nhưng API chưa ghi nhận có thể gây lặp thông báo.
+
+Khi tổng bình luận tăng, thông báo có tiêu đề **CÓ BÌNH LUẬN MỚI**, số tăng và link bài Facebook. Mọi thông báo tương tác đều kèm link bài tương ứng.
+
+Tin Messenger được theo dõi độc lập với tự trả lời: hội thoại có `NotifyIncoming=true` (mặc định bật) vẫn báo Telegram khi `AutoReply=false`, kể cả trợ lý đang tạm dừng đăng/trả lời. Chỉ các hội thoại trong danh sách đã thêm hoặc inbox được đồng bộ mới được theo dõi; mỗi chu kỳ ưu tiên hội thoại có dấu chưa đọc và kiểm tra tối đa 5 hội thoại. Lần đầu lấy mốc lịch sử, sau đó dùng ID ổn định để gửi trích nội dung các tin khách mới kèm link `/messages/t/ID`. Tin do chủ tài khoản gửi không được coi là tin khách; tin cũ không bị gửi lại hàng loạt khi khởi động. Thông báo được lưu trước khi gửi và giữ lại để thử lại khi Telegram lỗi.
+
+Để đọc nội dung/từng tin, cần cấu hình đúng `IncomingMessages`, `OutgoingMessages` và `MessageIdAttribute` theo DOM Messenger thực tế. Khi thiếu hai selector, bot cảnh báo một lần và chỉ báo hội thoại chưa đọc nếu Facebook có nhãn chưa đọc rõ ràng; không đoán chiều gửi hoặc bịa nội dung. Theo dõi này không bao phủ tin yêu cầu, tin ẩn hoặc các hội thoại chưa được inbox đồng bộ.
+
+### Thiết lập Messenger bằng hai tin mẫu
+
+Trên `/dashboard#threads`, chọn **Thiết lập nhận tin Messenger**, chọn hội thoại có tin của cả hai phía (hoặc dán link `/messages/t/ID` hay `/messages/e2ee/t/ID`), rồi nhấn **Mở thiết lập trong Chromium**. Trong cửa sổ Chromium, bấm trực tiếp một bong bóng tin khách gửi, tiếp theo một bong bóng tin bạn gửi. Không cần gửi tin thử cho khách.
+
+Worker xử lý phiên này độc lập với trạng thái tạm dừng đăng bài và giữ các tác vụ trình duyệt khác chờ trong lúc thiết lập. Chỉ khi hai bộ nhận diện không trùng và đúng hai ID mẫu còn tìm thấy sau khi tải lại hội thoại, cấu hình mới được ghi vào `App_Data/messenger-selectors.json` và áp dụng ngay. Lần khởi động sau sẽ nạp lại file này. Không sửa key Telegram/OpenAI hay `appsettings.json`.
+
+Nếu cần PIN Messenger, hãy hủy thiết lập, mở khóa lịch sử trong Chromium rồi bắt đầu lại. Phiên hết hạn sau 5 phút. Nếu DOM không có ID tin ổn định hoặc không phân biệt được hai chiều, ứng dụng báo lỗi và giữ cấu hình cũ; không tạo ID giả từ nội dung. Sau khi thành công, bot gửi **ĐÃ THIẾT LẬP MESSENGER**, lấy mốc lịch sử rồi báo những tin khách mới.
 
 Dữ liệu hội thoại gần nhất được gửi tới nhà cung cấp AI để trả lời. Chỉ thu thập thông tin cần cho tư vấn/đặt lịch và giới hạn quyền truy cập dữ liệu khách.
 
