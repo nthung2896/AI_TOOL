@@ -122,12 +122,15 @@ public class RentalDb(DbContextOptions<RentalDb> options) : DbContext(options)
         var listing = b.Entity<RentalRoom>().Property(x => x.Listing)
             .HasConversion(v => RentalListing.Serialize(v), v => RentalListing.Deserialize(v)).HasDefaultValueSql("N'{}'");
         listing.Metadata.SetValueComparer(new Microsoft.EntityFrameworkCore.ChangeTracking.ValueComparer<RentalListing>(
-            (a, c) => RentalListing.Serialize(a!) == RentalListing.Serialize(c!),
-            v => RentalListing.Serialize(v).GetHashCode(), v => RentalListing.Deserialize(RentalListing.Serialize(v))));
+            (a, c) => a == null ? c == null : c != null && RentalListing.Serialize(a) == RentalListing.Serialize(c),
+            v => v == null ? 0 : RentalListing.Serialize(v).GetHashCode(),
+            v => v == null ? null! : RentalListing.Deserialize(RentalListing.Serialize(v))));
         var images = b.Entity<RentalPost>().Property(x => x.Images)
             .HasConversion(v => RentalListing.SerializeImages(v), v => RentalListing.DeserializeImages(v)).HasDefaultValueSql("N'[]'");
         images.Metadata.SetValueComparer(new Microsoft.EntityFrameworkCore.ChangeTracking.ValueComparer<List<string>>(
-            (a, c) => a!.SequenceEqual(c!), v => RentalListing.SerializeImages(v).GetHashCode(), v => v.ToList()));
+            (a, c) => a == null ? c == null : c != null && a.SequenceEqual(c),
+            v => v == null ? 0 : RentalListing.SerializeImages(v).GetHashCode(),
+            v => v == null ? null! : v.ToList()));
         b.Entity<RentalGroup>().HasIndex(x => x.Url).IsUnique();
         b.Entity<RentalThread>().HasIndex(x => x.Url).IsUnique();
         b.Entity<RentalDelivery>().HasIndex(x => new { x.PostId, x.GroupId }).IsUnique();
@@ -172,10 +175,10 @@ public static class RentalBootstrap
         {
             await using var transaction = await db.Database.BeginTransactionAsync();
             foreach (var batch in System.Text.RegularExpressions.Regex.Split(db.Database.GenerateCreateScript(), @"^\s*GO\s*$", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-                if (!string.IsNullOrWhiteSpace(batch)) await db.Database.ExecuteSqlRawAsync(batch);
+                if (!string.IsNullOrWhiteSpace(batch)) await RentalSchemaUpgrade.ExecuteLiteralAsync(db, batch);
             await transaction.CommitAsync();
         }
-        await db.Database.ExecuteSqlRawAsync(RentalSchemaUpgrade.Sql);
+        await RentalSchemaUpgrade.ExecuteLiteralAsync(db, RentalSchemaUpgrade.Sql);
         if (!await db.State.AnyAsync()) { db.State.Add(new RentalState()); await db.SaveChangesAsync(); }
         Console.WriteLine("AI_TOOL: rental schema ready. Existing application migrations were not run.");
     }

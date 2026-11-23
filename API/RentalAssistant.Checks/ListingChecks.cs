@@ -1,11 +1,39 @@
 using Hinet.Api;
 using Microsoft.AspNetCore.Http;
 using System.ComponentModel.DataAnnotations;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 
 public static class ListingChecks
 {
     public static async Task Run(Action<bool, string> check)
     {
+        using (var db = new RentalDb(new DbContextOptionsBuilder<RentalDb>().UseSqlServer("Server=localhost;Database=AI_TOOL;Integrated Security=true").Options))
+        {
+            var comparer = db.Model.FindEntityType(typeof(RentalPost))!.FindProperty(nameof(RentalPost.Images))!.GetValueComparer()!;
+            var photos = new List<string> { "cover.jpg", "interior.jpg" };
+            check(!comparer.Equals(photos, null) && !comparer.Equals(null, photos) && comparer.Equals(null, null), "post image comparer handles EF null defaults in both directions");
+            check(!comparer.Equals(photos, new List<string> { "interior.jpg", "cover.jpg" }), "post image comparer preserves cover order");
+            var snapshot = (List<string>)comparer.Snapshot(photos)!;
+            photos.Add("extra.jpg");
+            check(snapshot.Count == 2 && !comparer.Equals(photos, snapshot), "image snapshot detects changes without mutating original snapshot");
+            var post = new RentalPost { RoomId = Guid.NewGuid(), Content = "Bản nháp có ảnh", Images = photos };
+            db.Posts.Add(post);
+            db.ChangeTracker.DetectChanges();
+            check(db.Entry(post).State == EntityState.Added, "SQL Server change tracker accepts a new draft with images and store defaults");
+            var trackedRoom = new RentalRoom { Name = "Phòng kiểm tra", Address = "Hà Nội", MonthlyRent = 3000000 };
+            db.Rooms.Attach(trackedRoom);
+            trackedRoom.Listing.Furniture = "Điều hòa";
+            db.ChangeTracker.DetectChanges();
+            check(db.Entry(trackedRoom).Property(r => r.Listing).IsModified, "listing JSON comparer detects nested updates");
+            var builder = db.GetService<IRawSqlCommandBuilder>();
+            foreach (var sql in new[] { RentalSchemaUpgrade.Sql, db.Database.GenerateCreateScript() })
+            {
+                var command = builder.Build(RentalSchemaUpgrade.EscapeLiteralSql(sql), Array.Empty<object>());
+                check(command.RelationalCommand.CommandText == sql, "EF formats schema SQL while preserving literal JSON braces");
+            }
+        }
         var directory = Path.Combine(Path.GetTempPath(), "AI_TOOL_listing_checks", Guid.NewGuid().ToString("N"));
         var media = new RentalMedia(directory);
         var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=");

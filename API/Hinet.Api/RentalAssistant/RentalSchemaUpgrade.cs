@@ -14,7 +14,12 @@ public sealed class RentalSchemaUpgrade(IDbContextFactory<RentalDb> factory) : I
     public async Task StartAsync(CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        await db.Database.ExecuteSqlRawAsync(Sql, ct);
+        await ExecuteLiteralAsync(db, Sql, ct);
     }
+    // ExecuteSqlRaw applies composite formatting even when no SQL parameters are supplied.
+    // Keep Sql unchanged for exported scripts; escape literal braces only for the EF execution path.
+    public static string EscapeLiteralSql(string sql) => sql.Replace("{", "{{").Replace("}", "}}");
+    public static Task<int> ExecuteLiteralAsync(RentalDb db, string sql, CancellationToken ct = default) =>
+        db.Database.ExecuteSqlRawAsync(EscapeLiteralSql(sql), ct);
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
 }

@@ -162,7 +162,7 @@ public class RentalDesktopEngine(RentalLocalStore store, RentalAi ai, RentalFace
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            store.Update(d => { var row = d.Deliveries.Single(x => x.Id == delivery.Id); row.Status = "NeedsReview"; row.Detail = "Kiểm tra trình duyệt và kết quả gửi trước khi thử lại."; d.State.Paused = true; return true; });
+            store.Update(d => { var row = d.Deliveries.Single(x => x.Id == delivery.Id); row.Status = "NeedsReview"; row.Detail = ex is RentalPublishException ? ex.Message : "Kiểm tra trình duyệt và kết quả gửi trước khi thử lại."; d.State.Paused = true; return true; });
             LastError = "Đăng nhóm chưa xác minh được. Đã tạm dừng để bạn kiểm tra.";
             await Notify(LastError, ct);
         }

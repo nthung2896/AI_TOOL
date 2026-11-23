@@ -75,26 +75,50 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
             await editor.FillAsync(content);
             if (images is { Count: > 0 })
             {
-                step = "tải ảnh bài đăng";
+                step = "tìm khung tải ảnh";
+                Status = "UploadingPhotos";
                 media.ValidateImages(images);
-                var dialog = p.Locator("[role=dialog]").Filter(new() { Has = editor });
-                if (await dialog.CountAsync() != 1) throw new InvalidOperationException("Không xác định khung đăng ảnh.");
-                var fileInput = dialog.Locator("input[type=file][accept*='image']").First;
-                if (await fileInput.CountAsync() == 0)
-                {
-                    await dialog.GetByRole(AriaRole.Button, new() { NameRegex = new System.Text.RegularExpressions.Regex("Ảnh/video|Photo/video", System.Text.RegularExpressions.RegexOptions.IgnoreCase) }).First.ClickAsync();
-                    fileInput = dialog.Locator("input[type=file][accept*='image']").First;
-                }
-                await fileInput.SetInputFilesAsync(images.Select(media.Resolve));
-                await dialog.Locator("img[src^='blob:'], img[src^='data:image']").Nth(images.Count - 1)
-                    .WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 60000 });
-                await dialog.Locator("[role=progressbar]").First.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 60000 });
+                await AttachPhotos(p, editor, images.Select(media.Resolve).ToArray(), value => step = value);
             }
             step = "bấm nút Đăng/Post";
+            Status = "SubmittingPost";
             await p.Locator(options.Value.PublishButton).ClickAsync();
+            Status = "Ready";
         }
-        catch (Exception ex) { throw new RentalPublishException(step, ex); }
+        catch (Exception ex) { Status = "PublishNeedsReview"; throw new RentalPublishException(step, ex); }
         // The caller records Submitted, never claims this is published/approved by the group.
+    }
+    public static async Task AttachPhotos(IPage p, ILocator editor, string[] paths, Action<string>? progress = null)
+    {
+        // Resolve the editor's actual ancestor: Has(PostEditor) would scope an already
+        // dialog-prefixed selector inside another dialog and fail to find the composer.
+        var dialog = editor.Locator("xpath=ancestor::*[@role='dialog'][1]");
+        if (await dialog.CountAsync() != 1) throw new InvalidOperationException("Không xác định khung đăng ảnh.");
+        var before = await dialog.Locator("img").EvaluateAllAsync<string[]>("nodes => nodes.map(n => n.currentSrc || n.src)");
+        var input = dialog.Locator("input[type=file][accept*='image' i]");
+        progress?.Invoke("mở bộ chọn ảnh");
+        if (await input.CountAsync() > 0)
+            await input.First.SetInputFilesAsync(paths, new() { Timeout = 15000 });
+        else
+        {
+            // Facebook may mount its file input outside the dialog. Capture the chooser
+            // from the photo button rather than assuming the input's DOM location.
+            var photo = dialog.GetByRole(AriaRole.Button, new() { NameRegex = new System.Text.RegularExpressions.Regex(@"Ảnh\s*\x2f\s*video|Photo\s*\x2f\s*video|Add photos", System.Text.RegularExpressions.RegexOptions.IgnoreCase) }).First;
+            var chooser = await p.RunAndWaitForFileChooserAsync(() => photo.ClickAsync(new() { Timeout = 15000 }), new() { Timeout = 15000 });
+            await chooser.SetFilesAsync(paths, new() { Timeout = 15000 });
+        }
+        progress?.Invoke($"chờ tải xong {paths.Length} ảnh");
+        await p.WaitForFunctionAsync("""
+            ({dialog, before, count}) => {
+                if (!dialog || !dialog.isConnected) return false;
+                const photos = [...dialog.querySelectorAll('img')].filter(img => {
+                    const src = img.currentSrc || img.src;
+                    return src && !before.includes(src) && img.complete && img.naturalWidth > 0 && img.getClientRects().length > 0;
+                });
+                const uploading = [...dialog.querySelectorAll('[role=progressbar]')].some(el => el.getClientRects().length > 0);
+                return photos.length >= count && !uploading;
+            }
+            """, new { dialog = await dialog.ElementHandleAsync(), before, count = paths.Length }, new() { Timeout = 60000 });
     }
     public async Task<InboxMessage?> Read(string url)
     {

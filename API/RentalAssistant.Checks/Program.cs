@@ -14,6 +14,7 @@ using Microsoft.Extensions.Options;
 
 int checks = 0;
 void Check(bool pass, string name) { if (!pass) throw new Exception("FAILED: " + name); checks++; Console.WriteLine("PASS: " + name); }
+if (args.Contains("--photo-upload-only")) { await PhotoUploadChecks.Run(Check); return; }
 SqlServerChecks.Run(Check);
 if (args.Contains("--sqlserver-only")) return;
 Check(RentalFacebook.ValidUrl("https://www.facebook.com/groups/123456/", true), "group URL accepted");
