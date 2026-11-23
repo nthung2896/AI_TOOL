@@ -336,9 +336,10 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
         var p = await Navigate("https://www.facebook.com/search/groups/?q=" + Uri.EscapeDataString(query));
         try { await p.Locator("a[href*='/groups/']").First.WaitForAsync(new() { Timeout = 10000 }); }
         catch (TimeoutException) { return new(); }
-        var hrefs = await p.Locator("a[href*='/groups/']").EvaluateAllAsync<string[]>("nodes => nodes.map(n => n.href)");
-        return hrefs.Select(h => h.Split('?')[0]).Where(h => ValidUrl(h, true)).Select(CanonicalUrl).Distinct()
-            .Take(20).Select(h => new RentalGroup { Url = h, Name = h.Split('/').Last(s => s.Length > 0), Enabled = false }).ToList();
+        var links = await p.Locator("a[href*='/groups/']").EvaluateAllAsync<string[]>("nodes => nodes.filter(n => n.getClientRects().length).map(n => JSON.stringify({url:n.href.split('?')[0],name:(n.innerText || n.getAttribute('aria-label') || '').trim()}))");
+        return links.Select(v => System.Text.Json.JsonSerializer.Deserialize<Dictionary<string,string>>(v)!)
+            .Where(v => ValidUrl(v["url"], true)).GroupBy(v => CanonicalUrl(v["url"]))
+            .Take(20).Select(g => { var name = g.Select(v => v["name"]).Where(n => n.Length > 2).OrderByDescending(n => n.Length).FirstOrDefault() ?? g.Key.Split('/').Last(); return new RentalGroup { Url = g.Key, Name = name[..Math.Min(name.Length,150)], Enabled = false }; }).ToList();
     }
     public async Task<List<RentalThread>> DiscoverThreads()
     {

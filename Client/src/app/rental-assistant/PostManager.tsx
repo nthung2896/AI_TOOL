@@ -3,10 +3,11 @@
 import { useState } from "react";
 import { CheckCircleOutlined, CopyOutlined, EditOutlined, FileTextOutlined, PictureOutlined, SearchOutlined, SendOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { Room, RoomPhotos } from "./RoomManager";
+import GroupPicker from "./GroupPicker";
 
-type Post = { id: string; roomId: string; content: string; status: string; images: string[]; createdAt?: string };
+type Post = { id: string; roomId: string; content: string; status: string; images: string[]; targetGroupIds?: string[]; hasGroupSelection?: boolean; createdAt?: string };
 type Delivery = { id: string; postId: string; groupId: string; status: string; detail: string; postUrl?: string };
-type Group = { id: string; name: string; enabled: boolean };
+type Group = { id: string; name: string; enabled: boolean; category?: string };
 type Props = {
   rooms: Room[]; posts: Post[]; deliveries: Delivery[]; groups: Group[]; busy: boolean;
   draftRoom: string; setDraftRoom: (id: string) => void; instruction: string; setInstruction: (text: string) => void;
@@ -23,9 +24,14 @@ export default function PostManager({ rooms, posts, deliveries, groups, busy, dr
   const [editing, setEditing] = useState<Post | null>(null);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
+  const [targetOverride, setTargetOverride] = useState<string[] | null>(null);
+  const [postTargets, setPostTargets] = useState<Record<string, string[]>>({});
+  const defaultTargets = groups.filter(g => g.enabled).map(g => g.id);
+  const selectedTargets = (targetOverride ?? defaultTargets).filter(id => defaultTargets.includes(id));
+  const targetsFor = (p: Post) => (postTargets[p.id] ?? (p.hasGroupSelection ? p.targetGroupIds || [] : defaultTargets)).filter(id => defaultTargets.includes(id));
   const available = rooms.filter(r => r.available);
   const selected = available.find(r => r.id === draftRoom);
-  const enabledGroups = groups.filter(g => g.enabled).length;
+  const enabledGroups = selectedTargets.length;
   const roomName = (id: string) => rooms.find(r => r.id === id)?.name || "Phòng không còn trong danh sách";
   const postDeliveries = (id: string) => deliveries.filter(d => d.postId === id);
   const matches = (p: Post, value: string) => value === "all" || (value === "draft" ? p.status === "Draft" : postDeliveries(p.id).some(d => value === "queued" ? ["Queued", "Sending"].includes(d.status) : value === "sent" ? d.status === "Submitted" : d.status === "NeedsReview"));
@@ -40,9 +46,10 @@ export default function PostManager({ rooms, posts, deliveries, groups, busy, dr
     <section className="ra-post-composer">
       <div className="ra-composer-main">
         <div className="ra-composer-heading"><span className="ra-composer-icon"><ThunderboltOutlined aria-hidden="true" /></span><div><h2>Soạn bài cho thuê</h2><p>Từ thông tin phòng thật đến bài đăng sẵn sàng chia sẻ.</p></div><span className="ra-composer-tag">Trợ lý viết bài</span></div>
-        <form onSubmit={e => { e.preventDefault(); void action(async () => { await api("posts", "POST", { roomId: draftRoom, instruction }); setFilter("draft"); setQuery(""); setNotice("Đã tạo bản nháp. Kiểm tra nội dung và ảnh trước khi duyệt đăng."); }); }}>
+        <form onSubmit={e => { e.preventDefault(); void action(async () => { await api("posts", "POST", { roomId: draftRoom, instruction, groupIds: selectedTargets }); setFilter("draft"); setQuery(""); setNotice("Đã tạo bản nháp. Kiểm tra nội dung và ảnh trước khi duyệt đăng."); }); }}>
           <label>Phòng cho thuê<select aria-label="Phòng cho thuê" required disabled={busy || !available.length} value={draftRoom} onChange={e => setDraftRoom(e.target.value)}><option value="">Chọn phòng cần viết bài</option>{available.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
           <label>Bạn muốn nhấn mạnh điều gì?<textarea aria-label="Yêu cầu viết bài" required rows={2} maxLength={2000} disabled={busy} placeholder="Ví dụ: Nhấn mạnh nội thất đầy đủ, gần trường và có thể chuyển vào ngay…" value={instruction} onChange={e => setInstruction(e.target.value)} /></label>
+          <GroupPicker groups={groups} selected={selectedTargets} onChange={setTargetOverride} disabled={busy} />
           <div className="ra-composer-bottom"><span><PictureOutlined aria-hidden="true" /> Ảnh đã lưu của phòng sẽ đi kèm bản nháp</span><button disabled={busy || !selected || !instruction.trim()}><ThunderboltOutlined aria-hidden="true" /> {busy ? "Đang xử lý…" : "Tạo bản nháp"}</button></div>
         </form>
         {!available.length && <p className="ra-composer-warning">Chưa có phòng còn trống. <a href="#rooms">Thêm hoặc cập nhật phòng</a> để bắt đầu.</p>}
@@ -57,6 +64,7 @@ export default function PostManager({ rooms, posts, deliveries, groups, busy, dr
       <div className="ra-post-filters" role="group" aria-label="Lọc bài đăng">{filters.map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}<span>{posts.filter(p => matches(p, value)).length}</span></button>)}</div>
       <div className="ra-post-grid">{visible.map(p => {
         const rows = postDeliveries(p.id);
+        const targetIds = targetsFor(p);
         const sent = rows.filter(d => d.status === "Submitted").length;
         const review = rows.filter(d => d.status === "NeedsReview").length;
         const isExpanded = expanded.includes(p.id);
@@ -65,8 +73,9 @@ export default function PostManager({ rooms, posts, deliveries, groups, busy, dr
         return <article className="ra-post-card" key={p.id}>
           <header className="ra-post-card-header"><span className="ra-post-avatar"><FileTextOutlined aria-hidden="true" /></span><div><h3>{roomName(p.roomId)}</h3><small>{created || "Bài đăng cho thuê phòng"}{!!p.images?.length && ` · ${p.images.length} ảnh`}</small></div>{badge(p.status)}</header>
           <div className="ra-post-card-body">{isEditing ? <label>Nội dung bản nháp<textarea aria-label="Nội dung bản nháp" rows={10} maxLength={10000} value={editing.content} onChange={e => setEditing({ ...editing, content: e.target.value })} /></label> : <><p className={`ra-post-content ${isExpanded ? "is-expanded" : ""}`}>{p.content}</p>{(p.content.length > 350 || p.content.split("\n").length > 8) && <button className="ra-link ra-expand-post" onClick={() => setExpanded(ids => isExpanded ? ids.filter(id => id !== p.id) : [...ids, p.id])}>{isExpanded ? "Thu gọn nội dung" : "Xem toàn bộ nội dung"}</button>}</>}<RoomPhotos images={p.images || []} name={roomName(p.roomId)} /></div>
-          <div className="ra-post-card-actions">{isEditing ? <><button disabled={busy || !editing.content.trim()} onClick={() => action(async () => { await api(`posts/${p.id}`, "PUT", { content: editing.content }); setEditing(null); setNotice("Đã lưu nội dung bản nháp."); })}>Lưu nội dung</button><button className="ra-secondary" disabled={busy} onClick={() => setEditing(null)}>Hủy sửa</button></> : <><button className="ra-post-copy" onClick={() => void copy(p.content)}><CopyOutlined aria-hidden="true" /> Sao chép</button>{p.status === "Draft" && <><button className="ra-post-edit" disabled={busy} onClick={() => setEditing({ ...p })}><EditOutlined aria-hidden="true" /> Sửa bài</button><button className="ra-post-approve" disabled={busy || !enabledGroups} onClick={() => action(() => api(`posts/${p.id}/approve`, "POST"))}><SendOutlined aria-hidden="true" /> Duyệt đăng · {enabledGroups} nhóm</button></>}</>}</div>
-          {p.status === "Draft" && !enabledGroups && <p className="ra-post-help"><a href="#groups">Chọn nhóm Facebook</a> để duyệt đăng bài này.</p>}
+          {p.status === "Draft" && <div className="ra-card-group-picker"><GroupPicker groups={groups} selected={targetIds} onChange={ids => setPostTargets(values => ({ ...values, [p.id]: ids }))} disabled={busy} /></div>}
+          <div className="ra-post-card-actions">{isEditing ? <><button disabled={busy || !editing.content.trim()} onClick={() => action(async () => { await api(`posts/${p.id}`, "PUT", { content: editing.content }); setEditing(null); setNotice("Đã lưu nội dung bản nháp."); })}>Lưu nội dung</button><button className="ra-secondary" disabled={busy} onClick={() => setEditing(null)}>Hủy sửa</button></> : <><button className="ra-post-copy" onClick={() => void copy(p.content)}><CopyOutlined aria-hidden="true" /> Sao chép</button>{p.status === "Draft" && <><button className="ra-post-edit" disabled={busy} onClick={() => setEditing({ ...p })}><EditOutlined aria-hidden="true" /> Sửa bài</button><button className="ra-post-approve" disabled={busy || !targetIds.length} onClick={() => action(() => api(`posts/${p.id}/approve`, "POST", { groupIds: targetIds }))}><SendOutlined aria-hidden="true" /> Duyệt đăng · {targetIds.length} nhóm</button></>}</>}</div>
+          {p.status === "Draft" && !targetIds.length && <p className="ra-post-help"><a href="#groups">Chọn nhóm Facebook</a> để duyệt đăng bài này.</p>}
           {!!rows.length && <details className="ra-post-deliveries" open={review > 0}><summary><span><SendOutlined aria-hidden="true" /> Lượt gửi nhóm <b>{rows.length}</b></span><span className={review ? "ra-delivery-review" : ""}>{review ? `${review} cần kiểm tra` : sent ? `${sent}/${rows.length} đã gửi` : "Đang xếp hàng"}</span></summary><div>{rows.map(d => <div className="ra-post-delivery-row" key={d.id}><div><strong>{groups.find(g => g.id === d.groupId)?.name || "Nhóm không còn trong danh sách"}</strong>{badge(d.status)}</div>{d.detail && <p>{d.detail}</p>}{d.postUrl && <p><a href={d.postUrl} target="_blank" rel="noreferrer">M? b?i Facebook</a></p>}{d.status === "Queued" && <button className="ra-link" disabled={busy} onClick={() => action(() => api(`deliveries/${d.id}/cancel`, "POST"))}>Hủy lượt gửi</button>}</div>)}<p className="ra-post-help">Đã gửi là đã thao tác gửi bài; nhóm có thể đang chờ quản trị viên duyệt.</p></div></details>}
           <details className="ra-post-reference"><summary>Mã bài đăng</summary><code>{p.id}</code></details>
         </article>;

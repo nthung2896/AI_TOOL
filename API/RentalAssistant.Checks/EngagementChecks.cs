@@ -4,6 +4,24 @@ public static class EngagementChecks
     public static void Run(Action<bool, string> check)
     {
         check(RentalFacebook.ValidUrl("https://www.facebook.com/messages/e2ee/t/123456", false), "encrypted Messenger conversation URLs are supported");
+        var firstGroup = new RentalGroup { Name = "Nhóm phòng trọ", Enabled = true, Category = "rooms" };
+        var secondGroup = new RentalGroup { Name = "Nhóm giáo dục", Enabled = true, Category = "education" };
+        var disabledGroup = new RentalGroup { Name = "Nhóm đang tắt", Enabled = false };
+        var allGroups = new[] { firstGroup, secondGroup, disabledGroup };
+        check(RentalGroupTargets.Select(allGroups, new[] { secondGroup.Id }).Single().Id == secondGroup.Id, "per-post selection targets only explicitly chosen groups");
+        check(RentalGroupTargets.Select(allGroups, Array.Empty<Guid>()).Count == 0, "an empty explicit selection never falls back to every enabled group");
+        check(RentalGroupTargets.Select(allGroups, null).Count == 2, "legacy Telegram approval keeps the enabled group default");
+        bool rejectedTarget = false;
+        try { RentalGroupTargets.Select(allGroups, new[] { disabledGroup.Id }); } catch (InvalidOperationException) { rejectedTarget = true; }
+        check(rejectedTarget, "disabled groups cannot be approved for posting");
+        rejectedTarget = false;
+        try { RentalGroupTargets.Select(allGroups, new[] { Guid.NewGuid() }); } catch (InvalidOperationException) { rejectedTarget = true; }
+        check(rejectedTarget, "unknown group IDs cannot enter a delivery queue");
+        var discovery = new RentalGroupDiscovery();
+        discovery.Start("education", "Hà Nội", "gia sư");
+        check(discovery.Snapshot().State == "Queued" && discovery.Snapshot().Category == "education", "category searches queue browser work without saving groups automatically");
+        var snapshot = RentalGroupTargets.Deserialize(RentalGroupTargets.Serialize(new List<Guid> { firstGroup.Id, secondGroup.Id }));
+        check(snapshot.SequenceEqual(new[] { firstGroup.Id, secondGroup.Id }), "selected group IDs round trip through persisted JSON");
         var selected = new RentalRoom { Name = "Ngõ 1 Bùi Xương Trạch", Available = true };
         var other = new RentalRoom { Name = "Phòng Thanh Xuân", Available = true };
         check(RentalTelegram.SelectRoom(new[] { selected, other }, "Đăng bài cho thuê phòng Ngõ 1 Bùi Xương Trạch, nhấn mạnh nội thất") == selected, "Telegram selects the named room among multiple available rooms");

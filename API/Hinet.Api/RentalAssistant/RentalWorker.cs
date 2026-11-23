@@ -9,7 +9,7 @@ namespace Hinet.Api;
 
 public class RentalWorker(
     IDbContextFactory<RentalDb> factory, IOptions<RentalOptions> options,
-    RentalAi ai, RentalFacebook facebook, ILogger<RentalWorker> log, RentalMessengerSetup messengerSetup) : BackgroundService
+    RentalAi ai, RentalFacebook facebook, ILogger<RentalWorker> log, RentalMessengerSetup messengerSetup, RentalGroupDiscovery groupDiscovery) : BackgroundService
 {
     private readonly RentalOptions o = options.Value;
     // A plain client avoids HttpClientFactory logging the Telegram token embedded in request URLs.
@@ -65,6 +65,7 @@ public class RentalWorker(
                     try { await Notify("ĐÃ THIẾT LẬP MESSENGER\nĐã kiểm tra hai chiều tin và ID mẫu sau khi tải lại. Bot sẽ lấy mốc lịch sử, rồi báo tin khách mới kèm link hội thoại.", ct); messengerSetupReported = true; }
                     catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning("Messenger setup confirmation pending ({Type})", ex.GetType().Name); }
                 }
+                if (!settingUp && o.BrowserEnabled) settingUp = await groupDiscovery.Tick(facebook);
                 if (!settingUp && !state.Paused && o.BrowserEnabled)
                 {
                     await Deliver(db, state, ct);
@@ -383,14 +384,16 @@ public class RentalWorker(
 
 public static class RentalActions
 {
-    public static async Task Approve(RentalDb db, Guid id, CancellationToken ct)
+    public static async Task Approve(RentalDb db, Guid id, CancellationToken ct, IReadOnlyCollection<Guid>? groupIds = null)
     {
         var post = await db.Posts.SingleAsync(x => x.Id == id, ct);
         if (post.Status != "Draft") return;
-        var groups = await db.Groups.Where(x => x.Enabled).ToListAsync(ct);
+        var selection = groupIds ?? (post.HasGroupSelection ? post.TargetGroupIds : null);
+        var groups = RentalGroupTargets.Select(await db.Groups.AsNoTracking().ToListAsync(ct), selection);
         if (groups.Count == 0) throw new InvalidOperationException("Chưa chọn nhóm đăng.");
         foreach (var group in groups) db.Deliveries.Add(new RentalDelivery { PostId = id, GroupId = group.Id });
         post.Status = "Approved";
+        post.TargetGroupIds = groups.Select(g => g.Id).ToList(); post.HasGroupSelection = true;
         await db.SaveChangesAsync(ct);
     }
 }

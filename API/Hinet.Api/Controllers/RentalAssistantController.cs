@@ -23,8 +23,19 @@ public sealed class RentalAccessAttribute : ActionFilterAttribute
 
 [ApiController, AllowAnonymous, RentalAccess, Route("api/rental-assistant")]
 public class RentalAssistantController(
-    RentalDb db, RentalAi ai, RentalFacebook browser, IOptions<RentalOptions> options, RentalMedia media, RentalMessengerSetup messengerSetup) : ControllerBase
+    RentalDb db, RentalAi ai, RentalFacebook browser, IOptions<RentalOptions> options, RentalMedia media, RentalMessengerSetup messengerSetup, RentalGroupDiscovery groupDiscovery) : ControllerBase
 {
+    public record GroupSearchRequest([Required, MaxLength(50)] string Category, [MaxLength(100)] string Location = "", [MaxLength(150)] string Keyword = "");
+    [HttpGet("groups/discover")]
+    public IActionResult GroupSearchStatus() => Ok(groupDiscovery.Snapshot());
+    [HttpPost("groups/discover")]
+    public IActionResult StartGroupSearch(GroupSearchRequest input)
+    {
+        if (!options.Value.Enabled || !options.Value.BrowserEnabled) return BadRequest("Bật worker và BrowserEnabled để tìm nhóm bằng Facebook.");
+        try { groupDiscovery.Start(input.Category, input.Location ?? "", input.Keyword ?? ""); return Ok(groupDiscovery.Snapshot()); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+    }
     public record MessengerSetupRequest([Required, MaxLength(400)] string Url);
     [HttpGet("messenger/setup")]
     public IActionResult MessengerSetupStatus() => Ok(messengerSetup.Snapshot());
@@ -127,6 +138,7 @@ public class RentalAssistantController(
         var group = await db.Groups.FindAsync(new object[] { id }, ct);
         if (group is null) { group = new RentalGroup { Id = id }; db.Groups.Add(group); }
         group.Name = input.Name.Trim(); group.Url = input.Url; group.Enabled = input.Enabled;
+        group.Category = RentalGroupDiscovery.Categories.ContainsKey(input.Category ?? "") ? input.Category : "other";
         await db.SaveChangesAsync(ct);
         return Ok(group);
     }
@@ -145,13 +157,17 @@ public class RentalAssistantController(
         await db.SaveChangesAsync(ct);
         return Ok(thread);
     }
-    public record DraftRequest(Guid RoomId, [Required, MaxLength(2000)] string Instruction);
+    public record DraftRequest(Guid RoomId, [Required, MaxLength(2000)] string Instruction, List<Guid>? GroupIds = null);
     [HttpPost("posts")]
     public async Task<IActionResult> Draft(DraftRequest input, CancellationToken ct)
     {
         var room = await db.Rooms.SingleOrDefaultAsync(x => x.Id == input.RoomId && x.Available, ct);
         if (room is null) return BadRequest("Phòng không tồn tại hoặc đã hết.");
+        try { if (input.GroupIds is not null) RentalGroupTargets.Select(await db.Groups.AsNoTracking().ToListAsync(ct), input.GroupIds); }
+        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
         var post = new RentalPost { RoomId = room.Id, Content = await ai.Draft(room, input.Instruction, ct), Images = room.Listing.Images.ToList() };
+        post.HasGroupSelection = input.GroupIds is not null;
+        post.TargetGroupIds = input.GroupIds?.Distinct().ToList() ?? new();
         db.Posts.Add(post); await db.SaveChangesAsync(ct);
         return Ok(post);
     }
@@ -166,13 +182,15 @@ public class RentalAssistantController(
         return Ok(post);
     }
     [HttpPost("posts/{id:guid}/approve")]
-    public async Task<IActionResult> Approve(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Approve(Guid id, CancellationToken ct, [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] ApproveRequest? input)
     {
         if (!await db.Posts.AnyAsync(x => x.Id == id, ct)) return NotFound();
         if (!await db.Groups.AnyAsync(x => x.Enabled, ct)) return BadRequest("Hãy bật ít nhất một nhóm được phép đăng.");
-        await RentalActions.Approve(db, id, ct);
+        try { await RentalActions.Approve(db, id, ct, input?.GroupIds); }
+        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
         return Ok();
     }
+    public record ApproveRequest(List<Guid>? GroupIds);
     [HttpPost("deliveries/{id:guid}/cancel")]
     public async Task<IActionResult> Cancel(Guid id, CancellationToken ct)
     {

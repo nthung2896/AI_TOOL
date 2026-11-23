@@ -10,6 +10,13 @@ public sealed class RentalSchemaUpgrade(IDbContextFactory<RentalDb> factory) : I
             ALTER TABLE [rental].[Rooms] ADD [Listing] nvarchar(max) NOT NULL CONSTRAINT DF_RentalRooms_Listing DEFAULT N'{}';
         IF OBJECT_ID(N'rental.Posts', N'U') IS NOT NULL AND COL_LENGTH(N'rental.Posts', N'Images') IS NULL
             ALTER TABLE [rental].[Posts] ADD [Images] nvarchar(max) NOT NULL CONSTRAINT DF_RentalPosts_Images DEFAULT N'[]';
+        IF OBJECT_ID(N'rental.Groups', N'U') IS NOT NULL AND COL_LENGTH(N'rental.Groups', N'Category') IS NULL
+            ALTER TABLE [rental].[Groups] ADD [Category] nvarchar(50) NOT NULL DEFAULT N'other';
+        IF OBJECT_ID(N'rental.Posts', N'U') IS NOT NULL
+        BEGIN
+            IF COL_LENGTH(N'rental.Posts', N'TargetGroupIds') IS NULL ALTER TABLE [rental].[Posts] ADD [TargetGroupIds] nvarchar(max) NOT NULL DEFAULT N'[]';
+            IF COL_LENGTH(N'rental.Posts', N'HasGroupSelection') IS NULL ALTER TABLE [rental].[Posts] ADD [HasGroupSelection] bit NOT NULL DEFAULT 0;
+        END;
         IF OBJECT_ID(N'rental.Threads', N'U') IS NOT NULL
         BEGIN
             IF COL_LENGTH(N'rental.Threads', N'NotifyIncoming') IS NULL ALTER TABLE [rental].[Threads] ADD [NotifyIncoming] bit NOT NULL DEFAULT 1;

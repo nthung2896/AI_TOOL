@@ -113,6 +113,14 @@ Khi gửi Facebook, worker tải ảnh lên khung soạn bài trước khi bấm
 
 ## Lệnh Telegram
 
+### Tìm nhóm theo danh mục và chọn nhóm cho từng bài
+
+Trong **Nhóm Facebook**, chọn **Phòng trọ**, **Bất động sản**, **Giáo dục** hoặc **Khác**; thêm khu vực/từ khóa rồi nhấn **Tìm nhóm trên Facebook**. Worker dùng Chromium đang đăng nhập để đọc tối đa 20 nhóm từ kết quả hiển thị. Chỉ khi bạn tích kết quả và bấm **Lưu nhóm đã chọn**, nhóm mới được thêm vào danh sách cho phép đăng. Có thể lọc danh mục, sửa tên/link/danh mục, tắt cho phép đăng hoặc thêm nhóm bằng link thủ công. Không tự tham gia nhóm.
+
+Trong **Soạn & đăng bài**, mục **Nhóm nhận bài** cho phép chọn nhóm trước khi tạo bản nháp. Các lựa chọn được lưu cùng bản nháp; có thể thay đổi tiếp ngay trên thẻ bản nháp trước khi bấm **Duyệt đăng**. API chỉ xếp hàng vào đúng các ID được chọn và từ chối nhóm không tồn tại/đã tắt. Bỏ chọn hết không có nghĩa là đăng vào tất cả nhóm. Tắt một nhóm sau khi duyệt khiến các lượt chưa gửi vào nhóm đó được bỏ qua.
+
+Với Telegram, `/duyet ID_BAI` dùng danh sách riêng đã lưu trên bản nháp, nếu có; các bản nháp tạo qua Telegram hoặc bản nháp cũ chưa có lựa chọn riêng vẫn dùng các nhóm đang bật. Khi cập nhật, khởi động lại API để thêm cột danh mục và danh sách nhóm nhận bài; dữ liệu cũ được giữ.
+
 ### Theo dõi bài và tương tác trên dashboard
 
 Trang Tổng quan có biểu đồ hoạt động 7/14/30 ngày, phân bổ trạng thái và số cảm xúc/bình luận/chia sẻ. Dữ liệu tổng hợp từ tối đa 100 bài, 200 lượt gửi gần nhất; dấu `—` nghĩa là chưa đọc được số liệu, không phải 0. Biểu đồ hoạt động dùng ngày tạo lượt gửi theo giờ Việt Nam.

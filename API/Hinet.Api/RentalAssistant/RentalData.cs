@@ -52,6 +52,7 @@ public class RentalRoom : IValidatableObject
 }
 public class RentalGroup
 {
+    [MaxLength(50)] public string Category { get; set; } = "other";
     public Guid Id { get; set; } = Guid.NewGuid();
     [Required, MaxLength(150)] public string Name { get; set; } = "";
     [Required, MaxLength(400)] public string Url { get; set; } = "";
@@ -78,6 +79,8 @@ public class RentalThread
 }
 public class RentalPost
 {
+    public List<Guid> TargetGroupIds { get; set; } = new();
+    public bool HasGroupSelection { get; set; }
     public List<string> Images { get; set; } = new();
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid RoomId { get; set; }
@@ -153,6 +156,11 @@ public class RentalDb(DbContextOptions<RentalDb> options) : DbContext(options)
             v => v == null ? 0 : RentalListing.SerializeImages(v).GetHashCode(),
             v => v == null ? null! : v.ToList()));
         b.Entity<RentalGroup>().HasIndex(x => x.Url).IsUnique();
+        var targets = b.Entity<RentalPost>().Property(x => x.TargetGroupIds)
+            .HasConversion(v => RentalGroupTargets.Serialize(v), v => RentalGroupTargets.Deserialize(v)).HasDefaultValueSql("N'[]'");
+        targets.Metadata.SetValueComparer(new Microsoft.EntityFrameworkCore.ChangeTracking.ValueComparer<List<Guid>>(
+            (a, c) => a == null ? c == null : c != null && a.SequenceEqual(c),
+            v => v == null ? 0 : RentalGroupTargets.Serialize(v).GetHashCode(), v => v == null ? null! : v.ToList()));
         b.Entity<RentalThread>().HasIndex(x => x.Url).IsUnique();
         b.Entity<RentalDelivery>().HasIndex(x => new { x.PostId, x.GroupId }).IsUnique();
         b.Entity<RentalPost>().HasIndex(x => x.TelegramUpdateId).IsUnique().HasFilter("[TelegramUpdateId] IS NOT NULL");
@@ -167,6 +175,7 @@ public static class RentalBootstrap
         services.Configure<RentalOptions>(config.GetSection("RentalAssistant"));
         services.AddSingleton<Microsoft.Extensions.Options.IPostConfigureOptions<RentalOptions>, RentalMessengerOptions>();
         services.AddSingleton<RentalMessengerSetup>();
+        services.AddSingleton<RentalGroupDiscovery>();
         services.AddDbContextFactory<RentalDb>(o => o.UseSqlServer(config["Connections:DefaultConnection"]));
         services.AddHttpClient("RentalExternal", c => c.Timeout = TimeSpan.FromSeconds(90));
         services.AddSingleton<RentalAi>();

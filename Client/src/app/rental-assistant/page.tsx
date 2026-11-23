@@ -4,10 +4,11 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import "./rental.css";
 import RoomManager, { Room } from "./RoomManager";
 import PostManager from "./PostManager";
+import GroupManager, { RentalGroup } from "./GroupManager";
 import MessengerSetupCard from "./MessengerSetupCard";
 import OverviewDashboard, { TrackedDelivery } from "./OverviewDashboard";
 
-type Group = { id: string; name: string; url: string; enabled: boolean };
+type Group = RentalGroup;
 type Thread = { id: string; customerName: string; url: string; autoReply: boolean; status: string; lastError: string; lastReply: string };
 type Post = { id: string; roomId: string; content: string; status: string; images: string[] };
 type Delivery = TrackedDelivery;
@@ -37,7 +38,6 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
     syncTab(); window.addEventListener("hashchange", syncTab);
     return () => window.removeEventListener("hashchange", syncTab);
   }, []);
-  const [group, setGroup] = useState<Partial<Group>>({ name: "", url: "", enabled: false });
   const [thread, setThread] = useState<Partial<Thread>>({ customerName: "", url: "", autoReply: false });
   const [draftRoom, setDraftRoom] = useState("");
   const [instruction, setInstruction] = useState("Viết tin cho thuê phòng, thân thiện, rõ giá và tiện ích.");
@@ -114,7 +114,7 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
 
       {tab === "rooms" && <RoomManager rooms={data.rooms} busy={busy} api={api} action={action} onDraft={id => { setDraftRoom(id); setTab("posts"); window.location.hash = "posts"; }} />}
 
-      {tab === "groups" && <><div className="ra-notice">Chọn nhóm bạn có quyền đăng và đã kiểm tra quy định. Tìm thêm bằng lệnh Telegram /timnhom từ khóa. Hệ thống không tự tham gia nhóm.</div><div className="ra-columns"><form className="ra-card" onSubmit={e => submit(e, async () => { await api(`groups/${group.id || crypto.randomUUID()}`, "PUT", group); setGroup({ name: "", url: "", enabled: false }); })}><h2>{group.id ? "Sửa nhóm" : "Thêm nhóm"}</h2><label>Tên nhóm<input required maxLength={150} value={group.name} onChange={e => setGroup({ ...group, name: e.target.value })} /></label><label>Link nhóm<input required type="url" placeholder="https://www.facebook.com/groups/123456" value={group.url} onChange={e => setGroup({ ...group, url: e.target.value })} /></label><label className="ra-check"><input type="checkbox" checked={group.enabled} onChange={e => setGroup({ ...group, enabled: e.target.checked })} />Đã kiểm tra, cho phép xếp hàng đăng vào nhóm này</label><button disabled={busy}>Lưu nhóm</button></form><div>{data.groups.length === 0 && <article className="ra-card">Chưa chọn nhóm nào.</article>}{data.groups.map(g => <article className="ra-card" key={g.id}><div className="ra-card-top"><h2>{g.name}</h2>{badge(g.enabled ? "Đã bật" : "Chưa chọn")}</div><a href={g.url} target="_blank" rel="noreferrer">Mở nhóm Facebook</a><div className="ra-actions"><button className="ra-secondary" onClick={() => setGroup(g)}>Sửa</button><button disabled={busy} onClick={() => action(() => api(`groups/${g.id}`, "PUT", { ...g, enabled: !g.enabled }))}>{g.enabled ? "Ngừng chọn" : "Chọn nhóm"}</button></div></article>)}</div></div></>}
+      {tab === "groups" && <GroupManager groups={data.groups} busy={busy} api={api} action={action} />}
 
       {tab === "posts" && <PostManager rooms={data.rooms} posts={data.posts} deliveries={data.deliveries} groups={data.groups} busy={busy} draftRoom={draftRoom} setDraftRoom={setDraftRoom} instruction={instruction} setInstruction={setInstruction} api={api} action={action} />}
 
