@@ -29,13 +29,47 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
         return page;
     }
     public async Task OpenLogin() => _ = await Page();
+    public async Task BeginMessengerSetup(string url, string script)
+    {
+        var p = await Navigate(url);
+        await p.BringToFrontAsync();
+        await p.EvaluateAsync(script);
+        Status = "SettingUpMessenger";
+    }
+    public async Task<MessengerSetupResult?> PollMessengerSetup()
+    {
+        if (page is null || page.IsClosed) throw new InvalidOperationException("Cửa sổ thiết lập đã đóng.");
+        if (!await page.EvaluateAsync<bool>("!!window.__rentalMessengerSetup")) throw new InvalidOperationException("Trang thiết lập đã thay đổi.");
+        var json = await page.EvaluateAsync<string?>("window.__rentalMessengerSetup?.result ? JSON.stringify(window.__rentalMessengerSetup.result) : null");
+        return json is null ? null : System.Text.Json.JsonSerializer.Deserialize<MessengerSetupResult>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+    }
+    public async Task EndMessengerSetup()
+    {
+        if (page is not null && !page.IsClosed) await page.EvaluateAsync("window.__rentalMessengerSetup?.cleanup?.()");
+        Status = "Ready";
+    }
+    public async Task VerifyMessengerSetup(string url, MessengerSetupResult result)
+    {
+        await EndMessengerSetup();
+        var p = await Navigate(url);
+        await VerifyMessengerSelectors(p, result);
+    }
+    public static async Task VerifyMessengerSelectors(IPage p, MessengerSetupResult result)
+    {
+        await p.Locator(result.IncomingMessages).First.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 10000 });
+        await p.Locator(result.OutgoingMessages).First.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 10000 });
+        var incoming = await ReadIncomingFromPage(p, result.IncomingMessages, result.OutgoingMessages, result.MessageIdAttribute);
+        var outgoingIds = await p.Locator(result.OutgoingMessages).EvaluateAllAsync<string[]>("(nodes, attr) => nodes.map(n => n.getAttribute(attr))", result.MessageIdAttribute);
+        if (!incoming.Any(m => m.Id == result.IncomingId) || !outgoingIds.Contains(result.OutgoingId) || outgoingIds.Contains(result.IncomingId) || outgoingIds.Any(string.IsNullOrWhiteSpace))
+            throw new InvalidOperationException("Không xác minh được hai tin mẫu sau khi tải lại hội thoại.");
+    }
 
     public static bool ValidUrl(string url, bool group)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != "https" || uri.Port != 443 || !string.IsNullOrEmpty(uri.UserInfo)) return false;
         if (uri.Host is not ("www.facebook.com" or "facebook.com")) return false;
         return System.Text.RegularExpressions.Regex.IsMatch(uri.AbsolutePath,
-            group ? @"^/groups/[a-zA-Z0-9.]+/?$" : @"^/messages/t/[a-zA-Z0-9.]+/?$") && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment);
+            group ? @"^/groups/[a-zA-Z0-9.]+/?$" : @"^/messages/(?:e2ee/)?t/[a-zA-Z0-9.]+/?$") && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment);
     }
     public static string CanonicalUrl(string url) => "https://www.facebook.com" + new Uri(url).AbsolutePath.TrimEnd('/');
     private async Task<IPage> Navigate(string url)
@@ -51,7 +85,8 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
         {
             var expected = new Uri(url);
             var actual = new Uri(p.Url);
-            if (actual.Host is not ("www.facebook.com" or "facebook.com") || actual.AbsolutePath.TrimEnd('/') != expected.AbsolutePath.TrimEnd('/'))
+            var sameThread = ValidUrl(url, false) && ValidUrl(p.Url, false) && actual.AbsolutePath.TrimEnd('/').Split('/').Last() == expected.AbsolutePath.TrimEnd('/').Split('/').Last();
+            if (actual.Host is not ("www.facebook.com" or "facebook.com") || (actual.AbsolutePath.TrimEnd('/') != expected.AbsolutePath.TrimEnd('/') && !sameThread))
                 throw new InvalidOperationException("Facebook đã chuyển sang trang khác; dừng thao tác.");
         }
         Status = "Ready";
@@ -308,9 +343,10 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
     public async Task<List<RentalThread>> DiscoverThreads()
     {
         var p = await Navigate("https://www.facebook.com/messages/");
-        try { await p.Locator("a[href*='/messages/t/']").First.WaitForAsync(new() { Timeout = 10000 }); }
+        const string threadLinks = "a[href*='/messages/t/'], a[href*='/messages/e2ee/t/']";
+        try { await p.Locator(threadLinks).First.WaitForAsync(new() { Timeout = 10000 }); }
         catch (TimeoutException) { return new(); }
-        var links = await p.Locator("a[href*='/messages/t/']").EvaluateAllAsync<string[]>(
+        var links = await p.Locator(threadLinks).EvaluateAllAsync<string[]>(
             "nodes => nodes.map(n => JSON.stringify({url:n.href.split('?')[0],name:n.innerText,unread:[n,...n.querySelectorAll('[aria-label]')].some(e=> /unread message|tin nhắn chưa đọc/i.test(e.getAttribute('aria-label') || '')) ? 'yes' : 'no'}))");
         return links.Select(x => System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(x)!)
             .Where(x => ValidUrl(x["url"], false)).DistinctBy(x => CanonicalUrl(x["url"])).Take(30)

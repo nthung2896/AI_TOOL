@@ -9,7 +9,7 @@ namespace Hinet.Api;
 
 public class RentalWorker(
     IDbContextFactory<RentalDb> factory, IOptions<RentalOptions> options,
-    RentalAi ai, RentalFacebook facebook, ILogger<RentalWorker> log) : BackgroundService
+    RentalAi ai, RentalFacebook facebook, ILogger<RentalWorker> log, RentalMessengerSetup messengerSetup) : BackgroundService
 {
     private readonly RentalOptions o = options.Value;
     // A plain client avoids HttpClientFactory logging the Telegram token embedded in request URLs.
@@ -18,6 +18,7 @@ public class RentalWorker(
     private DateTimeOffset lastInbox;
     private DateTimeOffset telegramNoticeRetryAt;
     private bool messengerConfigurationWarningSent;
+    private bool messengerSetupReported;
     public static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -57,17 +58,24 @@ public class RentalWorker(
                 }
                 db.ChangeTracker.Clear();
                 state = await db.State.SingleAsync(ct);
-                if (!state.Paused && o.BrowserEnabled)
+                var settingUp = await messengerSetup.Tick(facebook, ct);
+                if (settingUp) messengerSetupReported = false;
+                else if (messengerSetup.Snapshot().State == "Completed" && !messengerSetupReported)
+                {
+                    try { await Notify("ĐÃ THIẾT LẬP MESSENGER\nĐã kiểm tra hai chiều tin và ID mẫu sau khi tải lại. Bot sẽ lấy mốc lịch sử, rồi báo tin khách mới kèm link hội thoại.", ct); messengerSetupReported = true; }
+                    catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning("Messenger setup confirmation pending ({Type})", ex.GetType().Name); }
+                }
+                if (!settingUp && !state.Paused && o.BrowserEnabled)
                 {
                     await Deliver(db, state, ct);
                 }
-                if (o.BrowserEnabled && DateTimeOffset.UtcNow - lastInbox >= TimeSpan.FromSeconds(Math.Max(30, o.InboxIntervalSeconds)))
+                if (!settingUp && o.BrowserEnabled && DateTimeOffset.UtcNow - lastInbox >= TimeSpan.FromSeconds(Math.Max(30, o.InboxIntervalSeconds)))
                 {
                     lastInbox = DateTimeOffset.UtcNow;
                     await Inbox(db, ct);
                 }
-                if (o.BrowserEnabled) await SyncMetrics(db, ct);
-                if (o.BrowserEnabled) await ResolveMissingLink(db, ct);
+                if (!settingUp && o.BrowserEnabled) await SyncMetrics(db, ct);
+                if (!settingUp && o.BrowserEnabled) await ResolveMissingLink(db, ct);
                 await FlushTelegramNotice(db, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }

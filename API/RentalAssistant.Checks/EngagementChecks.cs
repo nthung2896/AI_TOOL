@@ -3,6 +3,7 @@ public static class EngagementChecks
 {
     public static void Run(Action<bool, string> check)
     {
+        check(RentalFacebook.ValidUrl("https://www.facebook.com/messages/e2ee/t/123456", false), "encrypted Messenger conversation URLs are supported");
         var selected = new RentalRoom { Name = "Ngõ 1 Bùi Xương Trạch", Available = true };
         var other = new RentalRoom { Name = "Phòng Thanh Xuân", Available = true };
         check(RentalTelegram.SelectRoom(new[] { selected, other }, "Đăng bài cho thuê phòng Ngõ 1 Bùi Xương Trạch, nhấn mạnh nội thất") == selected, "Telegram selects the named room among multiple available rooms");

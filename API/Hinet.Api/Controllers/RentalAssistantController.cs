@@ -23,8 +23,21 @@ public sealed class RentalAccessAttribute : ActionFilterAttribute
 
 [ApiController, AllowAnonymous, RentalAccess, Route("api/rental-assistant")]
 public class RentalAssistantController(
-    RentalDb db, RentalAi ai, RentalFacebook browser, IOptions<RentalOptions> options, RentalMedia media) : ControllerBase
+    RentalDb db, RentalAi ai, RentalFacebook browser, IOptions<RentalOptions> options, RentalMedia media, RentalMessengerSetup messengerSetup) : ControllerBase
 {
+    public record MessengerSetupRequest([Required, MaxLength(400)] string Url);
+    [HttpGet("messenger/setup")]
+    public IActionResult MessengerSetupStatus() => Ok(messengerSetup.Snapshot());
+    [HttpPost("messenger/setup")]
+    public IActionResult StartMessengerSetup(MessengerSetupRequest input)
+    {
+        if (!options.Value.Enabled || !options.Value.BrowserEnabled) return BadRequest("Bật worker và BrowserEnabled để mở thiết lập Messenger.");
+        try { messengerSetup.Start(input.Url); return Ok(messengerSetup.Snapshot()); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+    }
+    [HttpPost("messenger/setup/cancel")]
+    public IActionResult CancelMessengerSetup() { messengerSetup.Cancel(); return Ok(); }
     [HttpPost("images"), RequestSizeLimit(RentalMedia.MaxRequestBytes)]
     public async Task<IActionResult> UploadImages(CancellationToken ct)
     {

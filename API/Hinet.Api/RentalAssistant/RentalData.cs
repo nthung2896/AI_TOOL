@@ -165,6 +165,8 @@ public static class RentalBootstrap
     public static IServiceCollection AddRentalAssistant(this IServiceCollection services, IConfiguration config)
     {
         services.Configure<RentalOptions>(config.GetSection("RentalAssistant"));
+        services.AddSingleton<Microsoft.Extensions.Options.IPostConfigureOptions<RentalOptions>, RentalMessengerOptions>();
+        services.AddSingleton<RentalMessengerSetup>();
         services.AddDbContextFactory<RentalDb>(o => o.UseSqlServer(config["Connections:DefaultConnection"]));
         services.AddHttpClient("RentalExternal", c => c.Timeout = TimeSpan.FromSeconds(90));
         services.AddSingleton<RentalAi>();
