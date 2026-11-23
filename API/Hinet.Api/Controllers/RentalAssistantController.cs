@@ -23,9 +23,22 @@ public sealed class RentalAccessAttribute : ActionFilterAttribute
 
 [ApiController, AllowAnonymous, RentalAccess, Route("api/rental-assistant")]
 public class RentalAssistantController(
-    RentalDb db, RentalAi ai, RentalFacebook browser, IOptions<RentalOptions> options, RentalMedia media, RentalMessengerSetup messengerSetup, RentalGroupDiscovery groupDiscovery) : ControllerBase
+    RentalDb db, RentalAi ai, RentalFacebook browser, IOptions<RentalOptions> options, RentalMedia media, RentalMessengerSetup messengerSetup, RentalGroupDiscovery groupDiscovery, RentalWorkerStatus workerStatus) : ControllerBase
 {
-    public record GroupSearchRequest([Required, MaxLength(50)] string Category, [MaxLength(100)] string Location = "", [MaxLength(150)] string Keyword = "");
+    private Task<PostingQueueSnapshot> ReadQueue(CancellationToken ct) => RentalPostingQueue.Read(db, options.Value, workerStatus, ct,
+        messengerSetup.Snapshot().State is "Queued" or "Running" ? "messengerSetup" : groupDiscovery.Snapshot().State is "Queued" or "Running" ? "groupSearch" : null);
+    [HttpGet("posting/queue")]
+    public async Task<IActionResult> PostingQueue(CancellationToken ct) => Ok(await ReadQueue(ct));
+    public record PostingSettingsRequest([Range(1, 86400)] int IntervalSeconds);
+    [HttpPut("posting/settings")]
+    public async Task<IActionResult> PostingSettings(PostingSettingsRequest input, CancellationToken ct)
+    {
+        var state = await db.State.SingleAsync(ct);
+        state.PostIntervalSeconds = input.IntervalSeconds;
+        await db.SaveChangesAsync(ct);
+        return Ok(await ReadQueue(ct));
+    }
+    public record GroupSearchRequest([Required, MaxLength(50)] string Category, [MaxLength(100)] string Location = "", [MaxLength(500)] string Keyword = "");
     [HttpGet("groups/discover")]
     public IActionResult GroupSearchStatus() => Ok(groupDiscovery.Snapshot());
     [HttpPost("groups/discover")]
@@ -66,7 +79,7 @@ public class RentalAssistantController(
         aiConfigured = !string.IsNullOrWhiteSpace(options.Value.AiApiKey) && !string.IsNullOrWhiteSpace(options.Value.AiModel),
         telegramConfigured = !string.IsNullOrWhiteSpace(options.Value.TelegramToken) && options.Value.TelegramOwnerId > 0,
         rooms = await db.Rooms.AsNoTracking().ToListAsync(ct),
-        groups = await db.Groups.AsNoTracking().ToListAsync(ct),
+        groups = RentalGroupNames.CleanGroups(await db.Groups.AsNoTracking().ToListAsync(ct)),
         threads = await db.Threads.AsNoTracking().ToListAsync(ct),
         posts = await db.Posts.AsNoTracking().OrderByDescending(x => x.CreatedAt).Take(100).ToListAsync(ct),
         deliveries = await db.Deliveries.AsNoTracking().OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(ct),
@@ -137,7 +150,7 @@ public class RentalAssistantController(
         if (await db.Groups.AnyAsync(x => x.Url == input.Url && x.Id != id, ct)) return Conflict("Nhóm đã tồn tại.");
         var group = await db.Groups.FindAsync(new object[] { id }, ct);
         if (group is null) { group = new RentalGroup { Id = id }; db.Groups.Add(group); }
-        group.Name = input.Name.Trim(); group.Url = input.Url; group.Enabled = input.Enabled;
+        group.Name = RentalGroupNames.Clean(input.Name); group.Url = input.Url; group.Enabled = input.Enabled;
         group.Category = RentalGroupDiscovery.Categories.ContainsKey(input.Category ?? "") ? input.Category : "other";
         await db.SaveChangesAsync(ct);
         return Ok(group);

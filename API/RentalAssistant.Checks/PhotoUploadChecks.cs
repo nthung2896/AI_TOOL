@@ -58,6 +58,9 @@ public static class PhotoUploadChecks
         await page.SetContentAsync("<button onclick=\"fetch('https://www.facebook.com/api/graphql/',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'fb_api_req_friendly_name=ComposerStoryCreateMutation'})\">Post fixture</button>");
         found = await RentalFacebook.SubmitAndCapturePostLink(page, page.GetByRole(AriaRole.Button), "https://www.facebook.com/groups/fixture", "Room advert fixture", new HashSet<string>(), timeout: TimeSpan.FromSeconds(5));
         check(found == "https://www.facebook.com/groups/fixture/posts/333", "submission captures the permalink from an intercepted creation response before the feed renders");
+        await page.SetContentAsync("<nav><a href='https://www.facebook.com/groups/sidebar'>Nhóm không thuộc kết quả tìm kiếm</a></nav><main role='main'><a style='display:block;width:30px;height:30px' href='https://www.facebook.com/groups/nhatro' aria-label='Profile photo of Nhà trọ Hà Nội'></a><a href='https://www.facebook.com/groups/nhatro'>Nhà trọ Hà Nội</a><a href='https://www.facebook.com/groups/giasu' aria-label='Profile photo of Gia sư Hà Nội'>Gia sư Hà Nội</a></main>");
+        var groupResults = await RentalFacebook.ReadGroupResults(page);
+        check(groupResults.Count == 2 && groupResults[0].Name == "Nhà trọ Hà Nội" && groupResults.All(g => !g.Name.Contains("Profile photo")), "group search uses real titles and excludes image labels and sidebar links");
         foreach (var path in paths) File.Delete(path);
         Directory.Delete(directory);
     }

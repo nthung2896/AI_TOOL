@@ -9,6 +9,7 @@ type Post = { id: string; roomId: string; content: string; status: string; image
 type Delivery = { id: string; postId: string; groupId: string; status: string; detail: string; postUrl?: string };
 type Group = { id: string; name: string; enabled: boolean; category?: string };
 type Props = {
+  nextDeliveryId?: string;
   rooms: Room[]; posts: Post[]; deliveries: Delivery[]; groups: Group[]; busy: boolean;
   draftRoom: string; setDraftRoom: (id: string) => void; instruction: string; setInstruction: (text: string) => void;
   api: (path: string, method?: string, body?: unknown) => Promise<any>;
@@ -18,7 +19,7 @@ const statuses: Record<string, string> = { Draft: "Bản nháp", Approved: "Đã
 const money = (value: number) => new Intl.NumberFormat("vi-VN").format(value) + " đ/tháng";
 const badge = (status: string) => <span className={`ra-post-status ra-post-status-${status}`}>{statuses[status] || status}</span>;
 
-export default function PostManager({ rooms, posts, deliveries, groups, busy, draftRoom, setDraftRoom, instruction, setInstruction, api, action }: Props) {
+export default function PostManager({ rooms, posts, deliveries, groups, busy, draftRoom, setDraftRoom, instruction, setInstruction, api, action, nextDeliveryId }: Props) {
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<Post | null>(null);
@@ -76,7 +77,7 @@ export default function PostManager({ rooms, posts, deliveries, groups, busy, dr
           {p.status === "Draft" && <div className="ra-card-group-picker"><GroupPicker groups={groups} selected={targetIds} onChange={ids => setPostTargets(values => ({ ...values, [p.id]: ids }))} disabled={busy} /></div>}
           <div className="ra-post-card-actions">{isEditing ? <><button disabled={busy || !editing.content.trim()} onClick={() => action(async () => { await api(`posts/${p.id}`, "PUT", { content: editing.content }); setEditing(null); setNotice("Đã lưu nội dung bản nháp."); })}>Lưu nội dung</button><button className="ra-secondary" disabled={busy} onClick={() => setEditing(null)}>Hủy sửa</button></> : <><button className="ra-post-copy" onClick={() => void copy(p.content)}><CopyOutlined aria-hidden="true" /> Sao chép</button>{p.status === "Draft" && <><button className="ra-post-edit" disabled={busy} onClick={() => setEditing({ ...p })}><EditOutlined aria-hidden="true" /> Sửa bài</button><button className="ra-post-approve" disabled={busy || !targetIds.length} onClick={() => action(() => api(`posts/${p.id}/approve`, "POST", { groupIds: targetIds }))}><SendOutlined aria-hidden="true" /> Duyệt đăng · {targetIds.length} nhóm</button></>}</>}</div>
           {p.status === "Draft" && !targetIds.length && <p className="ra-post-help"><a href="#groups">Chọn nhóm Facebook</a> để duyệt đăng bài này.</p>}
-          {!!rows.length && <details className="ra-post-deliveries" open={review > 0}><summary><span><SendOutlined aria-hidden="true" /> Lượt gửi nhóm <b>{rows.length}</b></span><span className={review ? "ra-delivery-review" : ""}>{review ? `${review} cần kiểm tra` : sent ? `${sent}/${rows.length} đã gửi` : "Đang xếp hàng"}</span></summary><div>{rows.map(d => <div className="ra-post-delivery-row" key={d.id}><div><strong>{groups.find(g => g.id === d.groupId)?.name || "Nhóm không còn trong danh sách"}</strong>{badge(d.status)}</div>{d.detail && <p>{d.detail}</p>}{d.postUrl && <p><a href={d.postUrl} target="_blank" rel="noreferrer">M? b?i Facebook</a></p>}{d.status === "Queued" && <button className="ra-link" disabled={busy} onClick={() => action(() => api(`deliveries/${d.id}/cancel`, "POST"))}>Hủy lượt gửi</button>}</div>)}<p className="ra-post-help">Đã gửi là đã thao tác gửi bài; nhóm có thể đang chờ quản trị viên duyệt.</p></div></details>}
+          {!!rows.length && <details className="ra-post-deliveries" open={review > 0}><summary><span><SendOutlined aria-hidden="true" /> Lượt gửi nhóm <b>{rows.length}</b></span><span className={review ? "ra-delivery-review" : ""}>{review ? `${review} cần kiểm tra` : sent ? `${sent}/${rows.length} đã gửi` : "Đang xếp hàng"}</span></summary><div>{rows.map(d => <div className="ra-post-delivery-row" key={d.id}><div><strong>{groups.find(g => g.id === d.groupId)?.name || "Nhóm không còn trong danh sách"}{d.id === nextDeliveryId && d.status === "Queued" && <span className="ra-next-row-badge">Tiếp theo</span>}</strong>{badge(d.status)}</div>{d.detail && <p>{d.detail}</p>}{d.postUrl && <p><a href={d.postUrl} target="_blank" rel="noreferrer">M? b?i Facebook</a></p>}{d.status === "Queued" && <button className="ra-link" disabled={busy} onClick={() => action(() => api(`deliveries/${d.id}/cancel`, "POST"))}>Hủy lượt gửi</button>}</div>)}<p className="ra-post-help">Đã gửi là đã thao tác gửi bài; nhóm có thể đang chờ quản trị viên duyệt.</p></div></details>}
           <details className="ra-post-reference"><summary>Mã bài đăng</summary><code>{p.id}</code></details>
         </article>;
       })}</div>

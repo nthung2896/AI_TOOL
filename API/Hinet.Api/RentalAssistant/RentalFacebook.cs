@@ -334,12 +334,17 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
     public async Task<List<RentalGroup>> SearchGroups(string query)
     {
         var p = await Navigate("https://www.facebook.com/search/groups/?q=" + Uri.EscapeDataString(query));
-        try { await p.Locator("a[href*='/groups/']").First.WaitForAsync(new() { Timeout = 10000 }); }
+        return await ReadGroupResults(p);
+    }
+    public static async Task<List<RentalGroup>> ReadGroupResults(IPage p)
+    {
+        var results = p.Locator("[role=main] a[href*='/groups/']");
+        try { await results.First.WaitForAsync(new() { Timeout = 10000 }); }
         catch (TimeoutException) { return new(); }
-        var links = await p.Locator("a[href*='/groups/']").EvaluateAllAsync<string[]>("nodes => nodes.filter(n => n.getClientRects().length).map(n => JSON.stringify({url:n.href.split('?')[0],name:(n.innerText || n.getAttribute('aria-label') || '').trim()}))");
+        var links = await results.EvaluateAllAsync<string[]>("nodes => nodes.filter(n => n.getClientRects().length).map(n => JSON.stringify({url:n.href.split('?')[0],name:(n.innerText || n.getAttribute('aria-label') || '').trim(),source:n.innerText?.trim() ? 'text' : 'label'}))");
         return links.Select(v => System.Text.Json.JsonSerializer.Deserialize<Dictionary<string,string>>(v)!)
             .Where(v => ValidUrl(v["url"], true)).GroupBy(v => CanonicalUrl(v["url"]))
-            .Take(20).Select(g => { var name = g.Select(v => v["name"]).Where(n => n.Length > 2).OrderByDescending(n => n.Length).FirstOrDefault() ?? g.Key.Split('/').Last(); return new RentalGroup { Url = g.Key, Name = name[..Math.Min(name.Length,150)], Enabled = false }; }).ToList();
+            .Take(20).Select(g => { var name = g.OrderBy(v => v["source"] == "text" ? 0 : 1).Select(v => RentalGroupNames.Clean(v["name"])).FirstOrDefault(RentalGroupNames.Useful) ?? g.Key.Split('/').Last(); return new RentalGroup { Url = g.Key, Name = name[..Math.Min(name.Length,150)], Enabled = false }; }).ToList();
     }
     public async Task<List<RentalThread>> DiscoverThreads()
     {

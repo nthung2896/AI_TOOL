@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+:root {
+  --app-font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+}
+html, body {
+  font-family: var(--app-font-family);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+button, input, textarea, select { font-family: inherit; }
+
 main {
   min-height: calc(100vh - 336px);
 }

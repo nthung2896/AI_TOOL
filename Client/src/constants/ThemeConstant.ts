@@ -62,6 +62,7 @@ export const FONT_WEIGHT = {
   SEMIBOLD: 600,
   BOLD: 700,
 };
+export const APP_FONT_FAMILY = `"Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
 
 export const FONT_SIZES = {
   XS: "0.75rem", // 12px
@@ -94,8 +95,8 @@ export const SPACER: Record<number, string> = {
 export const lightTheme = {
   token: {
     colorPrimary: "#2563eb",
-    fontFamily: `'Inter', system-ui, sans-serif`,
-    fontSize: 14,
+    fontFamily: APP_FONT_FAMILY,
+    fontSize: 15,
     borderRadius: 6,
   },
 
@@ -166,6 +167,6 @@ export const lightTheme = {
 };
 
 export const baseTheme = {
-  fontFamily: `'Inter', system-ui, sans-serif`,
+  fontFamily: APP_FONT_FAMILY,
   primaryColor: "#2563eb",
 };

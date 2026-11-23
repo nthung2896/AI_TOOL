@@ -113,9 +113,19 @@ Khi gửi Facebook, worker tải ảnh lên khung soạn bài trước khi bấm
 
 ## Lệnh Telegram
 
+### Bộ đếm và khoảng cách giữa các lượt đăng
+
+Ở **Tổng quan** và **Soạn & đăng bài**, khối **Lịch gửi & hàng đợi** hiển thị bộ đếm từng giây, mốc sớm nhất được bắt đầu lượt tiếp theo, bài/phòng và nhóm sẽ nhận bài, nhóm đang xử lý nếu có, cùng tối đa 5 lượt kế tiếp theo đúng thứ tự. Dữ liệu hàng đợi cập nhật mỗi 5 giây; bộ đếm căn theo giờ API để không bị lệch do đồng hồ trên máy người dùng.
+
+Trong **Khoảng cách giữa các lượt**, nhập số phút/giây hoặc chọn mốc gợi ý, rồi **Lưu thời gian**. Giá trị từ 1 giây đến 24 giờ được lưu tại `rental.State.PostIntervalSeconds`, có hiệu lực cho các lượt đang chờ và giữ nguyên khi khởi động lại. Nếu chưa lưu, ứng dụng dùng `RentalAssistant:PostIntervalSeconds` trong cấu hình làm mặc định. Giảm khoảng cách có thể cho phép lượt kế tiếp bắt đầu ngay khi worker rảnh.
+
+Khoảng cách được tính từ lúc bắt đầu lượt trước, không phải lúc hoàn tất. Đây là thời điểm sớm nhất, không phải lịch hẹn chính xác: worker gửi tuần tự và có thể đang tải ảnh, đọc Messenger, đồng bộ tương tác hoặc thiết lập/tìm nhóm. Khi bộ đếm về 0 nhưng còn tác vụ, giao diện báo đang chờ worker; khi tạm dừng hoặc worker chưa chạy thì không hứa sẽ gửi ở mốc 0. Các nhóm tắt cho phép đăng hoặc phòng hết không được chọn làm lượt hợp lệ tiếp theo. Các lượt cùng thời gian tạo dùng ID để cố định thứ tự giữa giao diện và worker.
+
 ### Tìm nhóm theo danh mục và chọn nhóm cho từng bài
 
 Trong **Nhóm Facebook**, chọn **Phòng trọ**, **Bất động sản**, **Giáo dục** hoặc **Khác**; thêm khu vực/từ khóa rồi nhấn **Tìm nhóm trên Facebook**. Worker dùng Chromium đang đăng nhập để đọc tối đa 20 nhóm từ kết quả hiển thị. Chỉ khi bạn tích kết quả và bấm **Lưu nhóm đã chọn**, nhóm mới được thêm vào danh sách cho phép đăng. Có thể lọc danh mục, sửa tên/link/danh mục, tắt cho phép đăng hoặc thêm nhóm bằng link thủ công. Không tự tham gia nhóm.
+
+Có hai cách tìm: **Chọn theo danh mục** (có các chủ đề gợi ý để tích chọn) hoặc **Tự nhập từ khóa** (không cần danh mục). Có thể kết hợp chủ đề gợi ý với từ tự nhập. Dấu phẩy, chấm phẩy hoặc xuống dòng tách các cụm: ví dụ `sinh viên, nhà trọ, ccmn` tạo ba lượt tìm riêng rồi gộp link trùng, tối đa 5 cụm và 50 kết quả. Mỗi lượt đọc tối đa 20 nhóm đang hiển thị trong vùng kết quả tìm kiếm; không lấy link từ thanh bên. Tiền tố nhãn ảnh như `Profile photo of…` được loại khỏi tên nhóm.
 
 Trong **Soạn & đăng bài**, mục **Nhóm nhận bài** cho phép chọn nhóm trước khi tạo bản nháp. Các lựa chọn được lưu cùng bản nháp; có thể thay đổi tiếp ngay trên thẻ bản nháp trước khi bấm **Duyệt đăng**. API chỉ xếp hàng vào đúng các ID được chọn và từ chối nhóm không tồn tại/đã tắt. Bỏ chọn hết không có nghĩa là đăng vào tất cả nhóm. Tắt một nhóm sau khi duyệt khiến các lượt chưa gửi vào nhóm đó được bỏ qua.
 

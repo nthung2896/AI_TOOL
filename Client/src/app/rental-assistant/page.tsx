@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import "./rental.css";
 import RoomManager, { Room } from "./RoomManager";
 import PostManager from "./PostManager";
+import PostingQueueCard from "./PostingQueueCard";
 import GroupManager, { RentalGroup } from "./GroupManager";
 import MessengerSetupCard from "./MessengerSetupCard";
 import OverviewDashboard, { TrackedDelivery } from "./OverviewDashboard";
@@ -40,6 +41,7 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
   }, []);
   const [thread, setThread] = useState<Partial<Thread>>({ customerName: "", url: "", autoReply: false });
   const [draftRoom, setDraftRoom] = useState("");
+  const [nextDeliveryId, setNextDeliveryId] = useState("");
   const [instruction, setInstruction] = useState("Viết tin cho thuê phòng, thân thiện, rõ giá và tiện ích.");
   const api = useCallback(async (path: string, method = "GET", body?: unknown) => {
     const base = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5111").replace(/\/$/, "");
@@ -110,13 +112,14 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
       {error && <div role="alert" className="ra-error">{error}</div>}
       <div className="ra-statusbar"><span className={`ra-dot ${data.state.paused || !data.enabled ? "paused" : ""}`} />{!data.enabled ? "Worker chưa bật trong cấu hình" : data.state.paused ? "Trợ lý đang tạm dừng" : "Trợ lý đang hoạt động"}<span>Facebook: {browserLabels[data.browser] || data.browser}</span><button className="ra-link" disabled={busy} onClick={() => action(refresh)}>Làm mới</button>{embedded && <button className="ra-link" disabled={busy} onClick={lock}>Khóa bảng điều khiển</button>}</div>
 
+      {(tab === "overview" || tab === "posts") && <PostingQueueCard api={api} onNextDelivery={setNextDeliveryId} />}
       {tab === "overview" && <OverviewDashboard data={data} busy={busy} api={api} action={action} />}
 
       {tab === "rooms" && <RoomManager rooms={data.rooms} busy={busy} api={api} action={action} onDraft={id => { setDraftRoom(id); setTab("posts"); window.location.hash = "posts"; }} />}
 
       {tab === "groups" && <GroupManager groups={data.groups} busy={busy} api={api} action={action} />}
 
-      {tab === "posts" && <PostManager rooms={data.rooms} posts={data.posts} deliveries={data.deliveries} groups={data.groups} busy={busy} draftRoom={draftRoom} setDraftRoom={setDraftRoom} instruction={instruction} setInstruction={setInstruction} api={api} action={action} />}
+      {tab === "posts" && <PostManager nextDeliveryId={nextDeliveryId} rooms={data.rooms} posts={data.posts} deliveries={data.deliveries} groups={data.groups} busy={busy} draftRoom={draftRoom} setDraftRoom={setDraftRoom} instruction={instruction} setInstruction={setInstruction} api={api} action={action} />}
 
       {tab === "threads" && <><MessengerSetupCard threads={data.threads} api={api} /><div className="ra-notice">Chỉ theo dõi những hội thoại hiện trong inbox trình duyệt hoặc được thêm dưới đây. Tin cũ được lấy làm mốc khi khởi động, không trả lời lại hàng loạt. Cần cấu hình selector tin đến/tin đi trước khi bật.</div><div className="ra-columns"><form className="ra-card" onSubmit={e => submit(e, async () => { await api(`threads/${thread.id || crypto.randomUUID()}`, "PUT", thread); setThread({ customerName: "", url: "", autoReply: false }); })}><h2>Thêm / sửa khách</h2><label>Tên khách<input required maxLength={150} value={thread.customerName} onChange={e => setThread({ ...thread, customerName: e.target.value })} /></label><label>Link hội thoại Facebook<input required type="url" placeholder="https://www.facebook.com/messages/t/123456" value={thread.url} onChange={e => setThread({ ...thread, url: e.target.value })} /></label><label className="ra-check"><input type="checkbox" checked={thread.autoReply} onChange={e => setThread({ ...thread, autoReply: e.target.checked })} />Cho phép AI tự trả lời khách này</label><button disabled={busy}>Lưu khách</button></form><div>{data.threads.length === 0 && <article className="ra-card">Chưa có khách. Khi bật worker, các hội thoại đang hiển thị sẽ được đồng bộ.</article>}{data.threads.map(t => <article className="ra-card" key={t.id}><div className="ra-card-top"><h2>{t.customerName || "Khách Messenger"}</h2>{badge(t.status)}</div><a href={t.url} target="_blank" rel="noreferrer">Mở Messenger</a><p>AI trả lời: <b>{t.autoReply ? "Đang bật" : "Đang tắt"}</b></p>{t.lastError && <p className="ra-error">{t.lastError}</p>}{t.lastReply && <p className="ra-pre">Phản hồi gần nhất: {t.lastReply}</p>}<button className="ra-secondary" onClick={() => setThread(t)}>Quản lý khách</button></article>)}</div></div></>}
 

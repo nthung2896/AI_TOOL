@@ -4,6 +4,19 @@ public static class EngagementChecks
     public static void Run(Action<bool, string> check)
     {
         check(RentalFacebook.ValidUrl("https://www.facebook.com/messages/e2ee/t/123456", false), "encrypted Messenger conversation URLs are supported");
+        var scheduleNow = DateTimeOffset.Parse("2026-11-23T12:00:00Z");
+        var scheduleState = new RentalState { LastPostAt = scheduleNow };
+        var scheduleOptions = new RentalOptions { PostIntervalSeconds = 300 };
+        check(!RentalPostingQueue.IsDue(scheduleState, scheduleOptions, scheduleNow.AddSeconds(299)) && RentalPostingQueue.IsDue(scheduleState, scheduleOptions, scheduleNow.AddSeconds(300)), "posting cooldown becomes ready exactly at the configured deadline");
+        scheduleState.PostIntervalSeconds = 30;
+        check(RentalPostingQueue.Interval(scheduleState, scheduleOptions) == 30 && RentalPostingQueue.IsDue(scheduleState, scheduleOptions, scheduleNow.AddSeconds(30)), "saved interval overrides the fallback without an implicit 60 second floor");
+        scheduleState.PostIntervalSeconds = 600;
+        check(RentalPostingQueue.NextAllowed(scheduleState, scheduleOptions) == scheduleNow.AddSeconds(600), "changing the interval recomputes the next allowed time from the previous start");
+        scheduleState.LastPostAt = null;
+        check(RentalPostingQueue.IsDue(scheduleState, scheduleOptions, scheduleNow), "the first queued delivery does not wait for a nonexistent prior post");
+        var activity = new RentalWorkerStatus();
+        using (activity.Start()) { check(activity.Snapshot().Running, "worker queue status reports a running worker only while its lifetime is active"); }
+        check(!activity.Snapshot().Running, "worker status is cleared when the worker exits");
         var firstGroup = new RentalGroup { Name = "Nhóm phòng trọ", Enabled = true, Category = "rooms" };
         var secondGroup = new RentalGroup { Name = "Nhóm giáo dục", Enabled = true, Category = "education" };
         var disabledGroup = new RentalGroup { Name = "Nhóm đang tắt", Enabled = false };
@@ -22,6 +35,12 @@ public static class EngagementChecks
         check(discovery.Snapshot().State == "Queued" && discovery.Snapshot().Category == "education", "category searches queue browser work without saving groups automatically");
         var snapshot = RentalGroupTargets.Deserialize(RentalGroupTargets.Serialize(new List<Guid> { firstGroup.Id, secondGroup.Id }));
         check(snapshot.SequenceEqual(new[] { firstGroup.Id, secondGroup.Id }), "selected group IDs round trip through persisted JSON");
+        var queries = RentalGroupDiscovery.BuildQueries("rooms", "Hà Nội", "sinh viên, nhà trọ; ccmn");
+        check(queries.Count == 3 && queries[0] == "phòng trọ Hà Nội sinh viên" && queries[2] == "phòng trọ Hà Nội ccmn", "separate keyword phrases generate separate category searches instead of one restrictive query");
+        check(RentalGroupDiscovery.BuildQueries("other", "", "giáo dục Hà Nội").Single() == "giáo dục Hà Nội", "free text search does not require or prepend a category");
+        check(RentalGroupDiscovery.BuildQueries("rooms", "", "CCMN, ccmn").Count == 1, "duplicate keyword phrases are searched only once");
+        check(RentalGroupNames.Clean("Profile photo of Nhà Trọ, Phòng Trọ Giá Rẻ Nhất - Hà Nội") == "Nhà Trọ, Phòng Trọ Giá Rẻ Nhất - Hà Nội", "image accessibility prefixes are removed from Facebook group names");
+        check(RentalGroupNames.Clean("Ảnh đại diện của Phòng trọ Hà Nội") == "Phòng trọ Hà Nội", "Vietnamese image labels are removed from group titles");
         var selected = new RentalRoom { Name = "Ngõ 1 Bùi Xương Trạch", Available = true };
         var other = new RentalRoom { Name = "Phòng Thanh Xuân", Available = true };
         check(RentalTelegram.SelectRoom(new[] { selected, other }, "Đăng bài cho thuê phòng Ngõ 1 Bùi Xương Trạch, nhấn mạnh nội thất") == selected, "Telegram selects the named room among multiple available rooms");

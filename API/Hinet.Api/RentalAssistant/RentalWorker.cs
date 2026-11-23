@@ -9,7 +9,7 @@ namespace Hinet.Api;
 
 public class RentalWorker(
     IDbContextFactory<RentalDb> factory, IOptions<RentalOptions> options,
-    RentalAi ai, RentalFacebook facebook, ILogger<RentalWorker> log, RentalMessengerSetup messengerSetup, RentalGroupDiscovery groupDiscovery) : BackgroundService
+    RentalAi ai, RentalFacebook facebook, ILogger<RentalWorker> log, RentalMessengerSetup messengerSetup, RentalGroupDiscovery groupDiscovery, RentalWorkerStatus workerStatus) : BackgroundService
 {
     private readonly RentalOptions o = options.Value;
     // A plain client avoids HttpClientFactory logging the Telegram token embedded in request URLs.
@@ -38,6 +38,7 @@ public class RentalWorker(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         { log.LogError("Cannot acquire rental worker database lease ({Type}). Initialize the database and restart.", ex.GetType().Name); return; }
+        using var workerLifetime = workerStatus.Start();
         while (!ct.IsCancellationRequested)
         {
             try
@@ -53,31 +54,31 @@ public class RentalWorker(
                 await db.Threads.Where(x => x.Status == "Replying").ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, "NeedsReview").SetProperty(x => x.AutoReply, false), ct);
                 if (o.TelegramOwnerId > 0 && !string.IsNullOrWhiteSpace(o.TelegramToken))
                 {
-                    try { await PollTelegram(db, state, ct); }
+                    try { await workerStatus.Run("telegram", () => PollTelegram(db, state, ct)); }
                     catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning("Telegram polling failed ({Type}); dashboard tasks can continue.", ex.GetType().Name); }
                 }
                 db.ChangeTracker.Clear();
                 state = await db.State.SingleAsync(ct);
-                var settingUp = await messengerSetup.Tick(facebook, ct);
+                var settingUp = await workerStatus.Run("messengerSetup", () => messengerSetup.Tick(facebook, ct));
                 if (settingUp) messengerSetupReported = false;
                 else if (messengerSetup.Snapshot().State == "Completed" && !messengerSetupReported)
                 {
                     try { await Notify("ĐÃ THIẾT LẬP MESSENGER\nĐã kiểm tra hai chiều tin và ID mẫu sau khi tải lại. Bot sẽ lấy mốc lịch sử, rồi báo tin khách mới kèm link hội thoại.", ct); messengerSetupReported = true; }
                     catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning("Messenger setup confirmation pending ({Type})", ex.GetType().Name); }
                 }
-                if (!settingUp && o.BrowserEnabled) settingUp = await groupDiscovery.Tick(facebook);
+                if (!settingUp && o.BrowserEnabled) settingUp = await workerStatus.Run("groupSearch", () => groupDiscovery.Tick(facebook));
                 if (!settingUp && !state.Paused && o.BrowserEnabled)
                 {
-                    await Deliver(db, state, ct);
+                    await workerStatus.Run("posting", () => Deliver(db, state, ct));
                 }
                 if (!settingUp && o.BrowserEnabled && DateTimeOffset.UtcNow - lastInbox >= TimeSpan.FromSeconds(Math.Max(30, o.InboxIntervalSeconds)))
                 {
                     lastInbox = DateTimeOffset.UtcNow;
-                    await Inbox(db, ct);
+                    await workerStatus.Run("inbox", () => Inbox(db, ct));
                 }
-                if (!settingUp && o.BrowserEnabled) await SyncMetrics(db, ct);
-                if (!settingUp && o.BrowserEnabled) await ResolveMissingLink(db, ct);
-                await FlushTelegramNotice(db, ct);
+                if (!settingUp && o.BrowserEnabled) await workerStatus.Run("metrics", () => SyncMetrics(db, ct));
+                if (!settingUp && o.BrowserEnabled) await workerStatus.Run("postLinks", () => ResolveMissingLink(db, ct));
+                await workerStatus.Run("telegramNotices", () => FlushTelegramNotice(db, ct));
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex) { log.LogError("Rental worker failed ({Type}). Check database, credentials and selectors.", ex.GetType().Name); }
@@ -170,8 +171,10 @@ public class RentalWorker(
 
     private async Task Deliver(RentalDb db, RentalState state, CancellationToken ct)
     {
-        if (state.LastPostAt.HasValue && DateTimeOffset.UtcNow - state.LastPostAt < TimeSpan.FromSeconds(Math.Max(60, o.PostIntervalSeconds))) return;
-        var delivery = await db.Deliveries.Where(x => x.Status == "Queued").OrderBy(x => x.CreatedAt).FirstOrDefaultAsync(ct);
+        // Refresh scheduling state so a saved interval change applies to the very next attempt.
+        var scheduling = await db.State.AsNoTracking().SingleAsync(ct);
+        if (scheduling.Paused || !RentalPostingQueue.IsDue(scheduling, o, DateTimeOffset.UtcNow)) return;
+        var delivery = await db.Deliveries.Where(x => x.Status == "Queued").OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).FirstOrDefaultAsync(ct);
         if (delivery is null) return;
         var post = await db.Posts.SingleAsync(x => x.Id == delivery.PostId, ct);
         var group = await db.Groups.SingleAsync(x => x.Id == delivery.GroupId, ct);

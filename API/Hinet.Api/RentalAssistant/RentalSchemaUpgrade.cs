@@ -6,6 +6,8 @@ namespace Hinet.Api;
 public sealed class RentalSchemaUpgrade(IDbContextFactory<RentalDb> factory) : IHostedService
 {
     public const string Sql = """
+        IF OBJECT_ID(N'rental.State', N'U') IS NOT NULL AND COL_LENGTH(N'rental.State', N'PostIntervalSeconds') IS NULL
+            ALTER TABLE [rental].[State] ADD [PostIntervalSeconds] int NULL;
         IF OBJECT_ID(N'rental.Rooms', N'U') IS NOT NULL AND COL_LENGTH(N'rental.Rooms', N'Listing') IS NULL
             ALTER TABLE [rental].[Rooms] ADD [Listing] nvarchar(max) NOT NULL CONSTRAINT DF_RentalRooms_Listing DEFAULT N'{}';
         IF OBJECT_ID(N'rental.Posts', N'U') IS NOT NULL AND COL_LENGTH(N'rental.Posts', N'Images') IS NULL

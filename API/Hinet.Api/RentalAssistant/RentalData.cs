@@ -125,6 +125,7 @@ public class RentalAppointment
 }
 public class RentalState
 {
+    [Range(1, 86400)] public int? PostIntervalSeconds { get; set; }
     [Key] public int Id { get; set; } = 1;
     public long TelegramOffset { get; set; }
     public bool Paused { get; set; } = true;
@@ -176,6 +177,7 @@ public static class RentalBootstrap
         services.AddSingleton<Microsoft.Extensions.Options.IPostConfigureOptions<RentalOptions>, RentalMessengerOptions>();
         services.AddSingleton<RentalMessengerSetup>();
         services.AddSingleton<RentalGroupDiscovery>();
+        services.AddSingleton<RentalWorkerStatus>();
         services.AddDbContextFactory<RentalDb>(o => o.UseSqlServer(config["Connections:DefaultConnection"]));
         services.AddHttpClient("RentalExternal", c => c.Timeout = TimeSpan.FromSeconds(90));
         services.AddSingleton<RentalAi>();
