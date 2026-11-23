@@ -21,9 +21,10 @@ public static class RentalDesktop
         builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
         var url = $"http://127.0.0.1:{port}";
         builder.Configuration["Kestrel:Endpoints:Http:Url"] = url;
-        builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = 65536);
+        builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = RentalMedia.MaxRequestBytes);
         builder.Logging.AddFilter("System.Net.Http.HttpClient.RentalExternal", LogLevel.None);
         builder.Services.AddSingleton(store);
+        builder.Services.AddSingleton(new RentalMedia(Path.Combine(store.DirectoryPath, "images")));
         builder.Services.AddSingleton<IOptions<RentalOptions>>(Options.Create(store.Options));
         builder.Services.AddHttpClient("RentalExternal", c => c.Timeout = TimeSpan.FromSeconds(90));
         builder.Services.AddSingleton<RentalAi>();
@@ -56,7 +57,17 @@ public static class RentalDesktop
         app.UseStaticFiles();
         app.MapGet("/", () => Results.Redirect("/rental-desktop/"));
         app.MapGet("/rental-desktop/", () => Results.File(Path.Combine(AppContext.BaseDirectory, "wwwroot", "rental-desktop", "index.html"), "text/html; charset=utf-8"));
+        app.MapGet("/rental-media/{id}", (string id, RentalMedia media) =>
+        {
+            try { return Results.File(Path.GetFullPath(media.Resolve(id)), RentalMedia.ContentType(id)); }
+            catch (ArgumentException) { return Results.NotFound(); }
+        });
         var api = app.MapGroup("/api/rental-assistant");
+        api.MapPost("/images", async (HttpRequest request, RentalMedia media, CancellationToken ct) =>
+        {
+            if (!request.HasFormContentType) return Results.BadRequest("Chọn ảnh để tải lên.");
+            return Results.Ok(await media.Upload((await request.ReadFormAsync(ct)).Files, ct));
+        });
         api.MapGet("/overview", (RentalDesktopEngine engine, RentalFacebook browser) =>
         {
             var data = store.Read();
@@ -103,7 +114,7 @@ public static class RentalDesktop
         api.MapPut("/state", (PauseInput input) => { store.Update(d => { d.State.Paused = input.Paused; return true; }); return Results.Ok(); });
         api.MapPut("/rooms/{id:guid}", (Guid id, RentalRoom input) =>
         {
-            Validate(input); input.Id = id;
+            Validate(input); app.Services.GetRequiredService<RentalMedia>().ValidateImages(input.Listing.Images); input.Id = id;
             return store.Update(d => { d.Rooms.RemoveAll(r => r.Id == id); d.Rooms.Add(input); return input; });
         });
         api.MapPut("/groups/{id:guid}", (Guid id, RentalGroup input) =>

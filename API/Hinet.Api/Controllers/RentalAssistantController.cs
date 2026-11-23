@@ -23,8 +23,15 @@ public sealed class RentalAccessAttribute : ActionFilterAttribute
 
 [ApiController, AllowAnonymous, RentalAccess, Route("api/rental-assistant")]
 public class RentalAssistantController(
-    RentalDb db, RentalAi ai, RentalFacebook browser, IOptions<RentalOptions> options) : ControllerBase
+    RentalDb db, RentalAi ai, RentalFacebook browser, IOptions<RentalOptions> options, RentalMedia media) : ControllerBase
 {
+    [HttpPost("images"), RequestSizeLimit(RentalMedia.MaxRequestBytes)]
+    public async Task<IActionResult> UploadImages(CancellationToken ct)
+    {
+        if (!Request.HasFormContentType) return BadRequest("Chọn ảnh để tải lên.");
+        try { return Ok(await media.Upload((await Request.ReadFormAsync(ct)).Files, ct)); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+    }
     [HttpGet("overview")]
     public async Task<IActionResult> Overview(CancellationToken ct) => Ok(new
     {
@@ -54,10 +61,13 @@ public class RentalAssistantController(
     [HttpPut("rooms/{id:guid}")]
     public async Task<IActionResult> Room(Guid id, RentalRoom input, CancellationToken ct)
     {
+        try { media.ValidateImages(input.Listing.Images); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
         var room = await db.Rooms.FindAsync(new object[] { id }, ct);
         if (room is null) { room = new RentalRoom { Id = id }; db.Rooms.Add(room); }
         room.Name = input.Name.Trim(); room.Address = input.Address.Trim();
         room.MonthlyRent = input.MonthlyRent; room.Details = input.Details; room.Available = input.Available;
+        room.Listing = input.Listing;
         await db.SaveChangesAsync(ct);
         return Ok(room);
     }
@@ -94,7 +104,7 @@ public class RentalAssistantController(
     {
         var room = await db.Rooms.SingleOrDefaultAsync(x => x.Id == input.RoomId && x.Available, ct);
         if (room is null) return BadRequest("Phòng không tồn tại hoặc đã hết.");
-        var post = new RentalPost { RoomId = room.Id, Content = await ai.Draft(room, input.Instruction, ct) };
+        var post = new RentalPost { RoomId = room.Id, Content = await ai.Draft(room, input.Instruction, ct), Images = room.Listing.Images.ToList() };
         db.Posts.Add(post); await db.SaveChangesAsync(ct);
         return Ok(post);
     }

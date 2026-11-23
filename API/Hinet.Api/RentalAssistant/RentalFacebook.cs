@@ -8,7 +8,7 @@ public sealed class RentalPublishException(string step, Exception inner)
     : Exception($"Đăng Facebook bị dừng ở bước: {step}. Kiểm tra trình duyệt trước khi thử lại.", inner);
 
 // Only the single worker accesses the browser. Never use the user's normal browser profile.
-public sealed class RentalFacebook(IOptions<RentalOptions> options) : IAsyncDisposable
+public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia media) : IAsyncDisposable
 {
     private IPlaywright? playwright;
     private IBrowserContext? context;
@@ -57,7 +57,7 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options) : IAsyncDisp
         Status = "Ready";
         return p;
     }
-    public async Task Publish(string url, string content)
+    public async Task Publish(string url, string content, IReadOnlyList<string>? images = null)
     {
         if (!ValidUrl(url, true)) throw new InvalidOperationException("URL nhóm không hợp lệ.");
         var step = "mở trang nhóm";
@@ -73,6 +73,23 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options) : IAsyncDisp
             if (await editor.CountAsync() != 1) throw new InvalidOperationException("Không xác định duy nhất ô soạn bài.");
             step = "điền nội dung";
             await editor.FillAsync(content);
+            if (images is { Count: > 0 })
+            {
+                step = "tải ảnh bài đăng";
+                media.ValidateImages(images);
+                var dialog = p.Locator("[role=dialog]").Filter(new() { Has = editor });
+                if (await dialog.CountAsync() != 1) throw new InvalidOperationException("Không xác định khung đăng ảnh.");
+                var fileInput = dialog.Locator("input[type=file][accept*='image']").First;
+                if (await fileInput.CountAsync() == 0)
+                {
+                    await dialog.GetByRole(AriaRole.Button, new() { NameRegex = new System.Text.RegularExpressions.Regex("Ảnh/video|Photo/video", System.Text.RegularExpressions.RegexOptions.IgnoreCase) }).First.ClickAsync();
+                    fileInput = dialog.Locator("input[type=file][accept*='image']").First;
+                }
+                await fileInput.SetInputFilesAsync(images.Select(media.Resolve));
+                await dialog.Locator("img[src^='blob:'], img[src^='data:image']").Nth(images.Count - 1)
+                    .WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 60000 });
+                await dialog.Locator("[role=progressbar]").First.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 60000 });
+            }
             step = "bấm nút Đăng/Post";
             await p.Locator(options.Value.PublishButton).ClickAsync();
         }

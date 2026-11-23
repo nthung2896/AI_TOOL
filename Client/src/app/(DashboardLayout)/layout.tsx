@@ -102,7 +102,7 @@ export default function RootLayout({
         <HeaderNav />
         <SideNav />
         <Layout style={{ paddingLeft: getLayoutGutter() }}>
-          <AppContent>
+          <AppContent style={pathname === "/dashboard" ? { padding: "12px", background: "#fff" } : undefined}>
             <Content className="h-min-100">
               <Suspense fallback={<Loading content="content" />}>
                 {children}

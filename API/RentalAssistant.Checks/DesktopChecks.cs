@@ -17,7 +17,7 @@ public static class DesktopChecks
         {
             var options = Options.Create(store.Options);
             var ai = new RentalAi(new Factory(new AiHandler()), options);
-            await using var browser = new RentalFacebook(options);
+            await using var browser = new RentalFacebook(options, new RentalMedia(Path.Combine(dir, "images")));
             using var engine = new RentalDesktopEngine(store, ai, browser, NullLogger<RentalDesktopEngine>.Instance);
             check(store.Options.AiMode == "template" && store.Options.ManagementKey.Length >= 32, "desktop starts with free templates and generated key");
             store.Update(d => { d.Rooms.Add(room); d.Threads.Add(thread); return true; });

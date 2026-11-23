@@ -57,6 +57,7 @@ handler.Status = HttpStatusCode.Unauthorized;
 rejected = false;
 try { await ai.Draft(new(), "hello", default); } catch (InvalidOperationException ex) { rejected = !ex.Message.Contains("test-key"); }
 Check(rejected, "provider failure has no raw response or credentials");
+await ListingChecks.Run(Check);
 await DesktopChecks.Run(Check);
 if (args.Length >= 3 && args[0] == "--desktop-smoke") await DesktopChecks.Smoke(args[1], args[2], Check);
 Console.WriteLine($"{checks} checks passed.");

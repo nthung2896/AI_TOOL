@@ -36,6 +36,7 @@ public class RentalAi(IHttpClientFactory clients, IOptions<RentalOptions> option
         ? Task.FromResult(RentalTemplates.Draft(room)) : Complete(
         "Bạn viết tin cho thuê phòng trọ bằng tiếng Việt. Chỉ dùng thông tin phòng được cung cấp. " +
         "Không bịa giá, địa chỉ, tiện ích hoặc khuyến mãi. Không thêm số điện thoại chưa có. " +
+        "Trình bày tự nhiên như bài đăng Facebook, mỗi ý một dòng. Dùng thông tin listing về vị trí, nội thất, điện nước, cọc, giờ giấc, liên hệ và hashtag nếu đã nhập; bỏ qua trường trống hoặc số 0. Không đưa ID hay tên file ảnh vào bài. " +
         "Kết thúc bằng lời mời nhắn Messenger của người đăng. Trả văn bản bài đăng, tối đa 2500 ký tự.",
         JsonSerializer.Serialize(new { room, instruction }), ct);
 

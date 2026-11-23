@@ -141,7 +141,7 @@ public class RentalWorker(
                 if (command == "/dang" && parts.Length >= 2 && Guid.TryParse(parts[1], out var roomId)) room = await db.Rooms.SingleOrDefaultAsync(x => x.Id == roomId && x.Available, ct);
                 else { var available = await db.Rooms.Where(x => x.Available).Take(2).ToListAsync(ct); room = available.Count == 1 ? available[0] : null; }
                 if (room is null) { await Notify("Hãy chọn phòng: /phong rồi /dang ID_PHONG yêu cầu viết bài.", ct); break; }
-                var post = new RentalPost { RoomId = room.Id, TelegramUpdateId = updateId, Content = await ai.Draft(room, text, ct) };
+                var post = new RentalPost { RoomId = room.Id, TelegramUpdateId = updateId, Images = room.Listing.Images.ToList(), Content = await ai.Draft(room, text, ct) };
                 db.Posts.Add(post); await db.SaveChangesAsync(ct);
                 await Notify($"BẢN NHÁP — {room.Name}\n\n{post.Content}\n\nĐăng các nhóm đã bật: /duyet {post.Id}", ct); break;
         }
@@ -160,7 +160,7 @@ public class RentalWorker(
         await db.SaveChangesAsync(ct);
         try
         {
-            await facebook.Publish(group.Url, post.Content);
+            await facebook.Publish(group.Url, post.Content, post.Images);
             delivery.Status = "Submitted";
             delivery.Detail = "Đã bấm gửi. Cần kiểm tra bài trên nhóm; có thể đang chờ quản trị viên duyệt.";
         }

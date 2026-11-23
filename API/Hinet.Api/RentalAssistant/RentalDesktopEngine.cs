@@ -130,7 +130,7 @@ public class RentalDesktopEngine(RentalLocalStore store, RentalAi ai, RentalFace
     public async Task<RentalPost> Draft(Guid roomId, string instruction, long? updateId, CancellationToken ct)
     {
         var room = store.Read().Rooms.SingleOrDefault(r => r.Id == roomId && r.Available) ?? throw new InvalidOperationException("Chọn phòng còn trống.");
-        var post = new RentalPost { RoomId = room.Id, Content = await ai.Draft(room, instruction, ct), TelegramUpdateId = updateId };
+        var post = new RentalPost { RoomId = room.Id, Images = room.Listing.Images.ToList(), Content = await ai.Draft(room, instruction, ct), TelegramUpdateId = updateId };
         return store.Update(d => { d.Posts.Insert(0, post); return post; });
     }
     public void Approve(Guid id) => store.Update(d =>
@@ -156,7 +156,7 @@ public class RentalDesktopEngine(RentalLocalStore store, RentalAi ai, RentalFace
         store.Update(d => { d.Deliveries.Single(x => x.Id == delivery.Id).Status = "Sending"; d.State.LastPostAt = DateTimeOffset.UtcNow; return true; });
         try
         {
-            await facebook.Publish(group.Url, post.Content);
+            await facebook.Publish(group.Url, post.Content, post.Images);
             store.Update(d => { var row = d.Deliveries.Single(x => x.Id == delivery.Id); row.Status = "Submitted"; row.Detail = "Đã bấm gửi. Kiểm tra bài có được nhóm duyệt không."; return true; });
             await Notify($"Đã gửi bài vào {group.Name}. Kiểm tra trạng thái duyệt trên nhóm.", ct);
         }

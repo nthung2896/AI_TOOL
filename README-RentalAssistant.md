@@ -101,6 +101,16 @@ Bot sử dụng long polling, không cần public webhook. Nếu bot đã gắn 
 
 Nếu UI không cho truy xuất ID ổn định theo DOM, adapter này cần được điều chỉnh trước khi tự trả lời; không dùng nội dung tin nhắn làm ID vì khách có thể gửi hai tin giống nhau.
 
+## Ảnh và thông tin bài cho thuê
+
+Trang `/dashboard#rooms` có nền trắng, biểu mẫu gọn và bản xem trước bài đăng. Nhập nội thất, diện tích, vị trí lân cận, điện nước, tiền cọc, giờ giấc, liên hệ và hashtag; các trường bổ sung có thể để trống.
+
+Mỗi phòng nhận tối đa 10 ảnh JPG/PNG/WebP, tối đa 8 MB mỗi ảnh. Có thể bỏ ảnh hoặc chọn ảnh bìa; ảnh bìa đứng đầu danh sách. Lưu phòng rồi chọn **Soạn bài**. Bản nháp lưu riêng danh sách ảnh tại thời điểm tạo, vì vậy sửa ảnh của phòng sau đó không thay đổi các bài đã duyệt. Muốn dùng ảnh mới, tạo bản nháp mới.
+
+Ảnh được lưu trong `API/Hinet.Api/App_Data/rental-images` khi chạy API từ thư mục dự án, hoặc `<thư mục dữ liệu desktop>/images` ở chế độ desktop. Sao lưu cả thư mục ảnh cùng dữ liệu. API tự bổ sung hai cột JSON `rental.Rooms.Listing` và `rental.Posts.Images` khi khởi động, giữ nguyên dữ liệu cũ; tài khoản SQL cần quyền ALTER cho lần nâng cấp này. Các lệnh khởi tạo và xuất script SQL cũng bao gồm thay đổi đó.
+
+Khi gửi Facebook, worker tải ảnh lên khung soạn bài trước khi bấm Đăng. Giao diện Facebook có thể thay đổi; nếu không nhận diện được ảnh đã tải, tác vụ dừng ở trạng thái cần kiểm tra.
+
 ## Lệnh Telegram
 
 Kiểm tra backend không cần Facebook/Telegram thật:

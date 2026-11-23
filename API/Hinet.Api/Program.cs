@@ -110,6 +110,7 @@ internal class Program
                 var rentalScript = System.Text.RegularExpressions.Regex.Replace(rental.Database.GenerateCreateScript(), @"^\s*GO\s*$", "", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 var setup = "USE [master];\nGO\nIF DB_ID(N'AI_TOOL') IS NULL CREATE DATABASE [AI_TOOL];\nGO\nUSE [AI_TOOL];\nGO\n" + script;
                 setup += "\nGO\nSET XACT_ABORT ON;\nBEGIN TRANSACTION;\nIF OBJECT_ID(N'rental.Rooms', N'U') IS NULL\nBEGIN\n" + rentalScript + "\nEND;\n";
+                setup += RentalSchemaUpgrade.Sql;
                 setup += "IF NOT EXISTS (SELECT 1 FROM [rental].[State]) BEGIN SET IDENTITY_INSERT [rental].[State] ON; INSERT INTO [rental].[State] ([Id], [TelegramOffset], [Paused]) VALUES (1, 0, 1); SET IDENTITY_INSERT [rental].[State] OFF; END;\nCOMMIT;\nGO\nSELECT DB_NAME() AS DatabaseName, UserName FROM dbo.AspNetUsers WHERE NormalizedUserName = N'ADMIN';\n";
                 File.WriteAllText("AI_TOOL.SqlServer.sql", setup, System.Text.Encoding.UTF8);
                 Console.WriteLine("Generated AI_TOOL.SqlServer.sql (no database connection required).");

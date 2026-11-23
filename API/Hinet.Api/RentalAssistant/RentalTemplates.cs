@@ -6,10 +6,25 @@ namespace Hinet.Api;
 // Deterministic offline mode. Clearly identified as templates in the product UI.
 public static class RentalTemplates
 {
-    public static string Draft(RentalRoom room) =>
-        $"CHO THUÊ {room.Name.ToUpperInvariant()}\n\n" +
-        $"Địa chỉ: {room.Address}\nGiá thuê: {room.MonthlyRent.ToString("N0", CultureInfo.GetCultureInfo("vi-VN"))}đ/tháng\n\n" +
-        $"{room.Details}\n\nBạn quan tâm hãy nhắn Messenger để hỏi thêm và đặt lịch xem phòng nhé!";
+    public static string Draft(RentalRoom room)
+    {
+        var l = room.Listing;
+        var lines = new List<string> { $"CHO THUÊ {room.Name.ToUpperInvariant()}", $"Địa chỉ: {room.Address}",
+            $"Giá thuê: {room.MonthlyRent.ToString("N0", CultureInfo.GetCultureInfo("vi-VN"))}đ/tháng" };
+        void Add(string label, string value) { if (!string.IsNullOrWhiteSpace(value)) lines.Add(label + value.Trim()); }
+        Add("Loại phòng: ", l.RoomType);
+        if (l.Area > 0) lines.Add($"Diện tích: {l.Area} m²");
+        if (l.MaxOccupants > 0) lines.Add($"Số người tối đa: {l.MaxOccupants}");
+        Add("Vị trí: ", l.NearbyPlaces); Add("Nội thất: ", l.Furniture); Add("Tiện ích: ", l.Amenities);
+        Add("Điện: ", l.Electricity); Add("Nước: ", l.Water); Add("Chi phí khác: ", l.OtherFees);
+        Add("Đặt cọc: ", l.Deposit); Add("Giờ giấc: ", l.AccessHours); Add("Nhận phòng: ", l.AvailableFrom);
+        Add("Giờ xem phòng: ", l.ViewingHours); Add("", room.Details);
+        if (l.OwnerDirect) lines.Add("Chính chủ, không qua môi giới.");
+        Add("Liên hệ: ", string.Join(" — ", new[] { l.ContactName, l.ContactPhones }.Where(x => !string.IsNullOrWhiteSpace(x))));
+        lines.Add("Nhắn Messenger để hỏi thêm và đặt lịch xem phòng nhé!");
+        Add("", l.Hashtags);
+        return string.Join("\n", lines);
+    }
 
     public static RentalAnswer Answer(List<RentalRoom> rooms, string conversation)
     {
