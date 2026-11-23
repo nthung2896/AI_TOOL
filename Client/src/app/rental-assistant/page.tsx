@@ -67,9 +67,11 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
     return text ? JSON.parse(text) : null;
   }, [key]);
   const refresh = useCallback(async () => {
-    const next = await api("overview"); setData(next); setConnected(true);
+    const next = await api("overview");
+    // Establish the private media cookie before mounting room and post images.
+    const nextAccount = await accountApi("me");
+    setAccount(nextAccount); setData(next); setConnected(true);
     try { sessionStorage.setItem("rental-access-token", key); } catch { }
-    setAccount(await accountApi("me"));
   }, [api, key]);
   useEffect(() => {
     if (!restoreSession) return;
@@ -117,11 +119,11 @@ export default function RentalAssistantPage({ embedded = false }: { embedded?: b
 
   return <main className={"ra-app" + (embedded ? " ra-embedded" : "") + (tab === "overview" ? " ra-overview" : "")}>
     {!embedded && <aside className="ra-sidebar"><span className="ra-brand">AI TOOL</span><h2>Rental desk</h2><p>Trợ lý cho thuê phòng</p>
-      <nav>{[["overview", "Tổng quan"], ["rooms", "Phòng trọ"], ["posts", "Bài đăng"], ["groups", "Nhóm Facebook"], ["threads", "Khách & Messenger"], ["appointments", "Lịch xem phòng"]].map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => { setTab(id); window.location.hash = id; }}>{label}</button>)}</nav>
+      <nav>{[["overview", "Tổng quan"], ["rooms", "Phòng trọ"], ["posts", "Bài đăng"], ["groups", "Nhóm Facebook"], ["threads", "Khách & Messenger"], ["appointments", "Lịch xem phòng"], ["settings", account?.isOwner ? "Tài khoản & khách thuê" : "Cấu hình của tôi"]].map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => { setTab(id); window.location.hash = id; }}>{label}</button>)}</nav>
       <div className="ra-sidebar-note">Telegram là nơi ra lệnh.<br />Đây là nơi kiểm tra và quản lý.</div>
       <button className="ra-logout" onClick={lock}>Khóa bảng điều khiển</button>
     </aside>}
-    <section className="ra-main"><header className="ra-header"><div><span className="ra-eyebrow">KHÔNG GIAN LÀM VIỆC</span><h1>{({ overview: "Hôm nay có gì?", rooms: "Quản lý phòng trọ", posts: "Nội dung & lượt đăng", groups: "Nhóm Facebook", threads: "Khách & Messenger", appointments: "Lịch xem phòng" } as Record<string, string>)[tab]}</h1></div>
+    <section className="ra-main"><header className="ra-header"><div><span className="ra-eyebrow">KHÔNG GIAN LÀM VIỆC</span><h1>{({ overview: "Hôm nay có gì?", rooms: "Quản lý phòng trọ", posts: "Nội dung & lượt đăng", groups: "Nhóm Facebook", threads: "Khách & Messenger", appointments: "Lịch xem phòng", settings: "Tài khoản & cấu hình" } as Record<string, string>)[tab]}</h1></div>
       <button disabled={busy} className={data.state.paused ? "" : "ra-secondary"} onClick={() => action(() => api("state", "PUT", { paused: !data.state.paused }))}>{data.state.paused ? "Bật trợ lý" : "Tạm dừng trợ lý"}</button></header>
       {error && <div role="alert" className="ra-error">{error}</div>}
       <div className="ra-statusbar"><span className={`ra-dot ${data.state.paused || !data.enabled ? "paused" : ""}`} />{!data.enabled ? "Worker chưa bật trong cấu hình" : data.state.paused ? "Trợ lý đang tạm dừng" : "Trợ lý đang hoạt động"}<span>Facebook: {browserLabels[data.browser] || data.browser}</span><button className="ra-link" disabled={busy} onClick={() => action(refresh)}>Làm mới</button><button className="ra-link" onClick={() => { setTab("settings"); window.location.hash = "settings"; }}>{account?.isOwner ? "Tài khoản & khách thuê" : "Cấu hình của tôi"}</button>{embedded && <button className="ra-link" disabled={busy} onClick={lock}>Đăng xuất</button>}</div>

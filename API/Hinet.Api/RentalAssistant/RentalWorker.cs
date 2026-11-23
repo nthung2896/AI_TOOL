@@ -46,6 +46,13 @@ public class RentalWorker(
             try
             {
                 if (o.AccountExpiresAt <= DateTimeOffset.UtcNow) return;
+                if (o.AccountId is Guid accountId)
+                {
+                    using var access = lease.Database.GetDbConnection().CreateCommand();
+                    access.CommandText = "SELECT COUNT_BIG(*) FROM [rental].[Customers] WHERE Id=@id AND Enabled=1 AND ExpiresAt>SYSDATETIMEOFFSET()";
+                    var id = access.CreateParameter(); id.ParameterName = "@id"; id.Value = accountId; access.Parameters.Add(id);
+                    if (Convert.ToInt64(await access.ExecuteScalarAsync(ct)) != 1) return;
+                }
                 using var browserLease = await facebook.Acquire(ct);
                 if (facebook.RemoteLoginActive) { await Task.Delay(1000, ct); continue; }
                 using var heartbeat = lease.Database.GetDbConnection().CreateCommand();

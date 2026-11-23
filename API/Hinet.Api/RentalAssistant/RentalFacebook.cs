@@ -19,13 +19,13 @@ public sealed class RentalFacebook(IOptions<RentalOptions> options, RentalMedia 
     public bool RemoteLoginActive => remoteUntil > DateTimeOffset.UtcNow;
     private sealed class Release(SemaphoreSlim semaphore) : IDisposable { public void Dispose() => semaphore.Release(); }
     public async Task<IDisposable> Acquire(CancellationToken ct = default) { await operationGate.WaitAsync(ct); return new Release(operationGate); }
-    public async Task BeginRemoteLogin()
+    public async Task BeginRemoteLogin(bool preservePage = false)
     {
         using var lease = await Acquire();
         remoteUntil = DateTimeOffset.UtcNow.AddMinutes(10);
         var p = await Page();
         await p.SetViewportSizeAsync(1100, 760);
-        await p.GotoAsync("https://www.facebook.com/", new() { WaitUntil = WaitUntilState.DOMContentLoaded });
+        if (!preservePage) await p.GotoAsync("https://www.facebook.com/", new() { WaitUntil = WaitUntilState.DOMContentLoaded });
     }
     public async Task<byte[]> RemoteScreen()
     {

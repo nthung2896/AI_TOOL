@@ -19,7 +19,7 @@ public sealed class RentalAccountController(RentalCatalog catalog, RentalTenantH
     [HttpGet("me")]
     public IActionResult Me()
     {
-        Response.Cookies.Append("rental_media", host.MediaProtector.Protect("media:" + Tenant.UserId, TimeSpan.FromHours(1)), new CookieOptions
+        Response.Cookies.Append("rental_media", host.MediaProtector.Protect("media:" + Tenant.UserId + ":" + DateTimeOffset.UtcNow.ToUnixTimeSeconds() + ":" + (User.FindFirstValue("rental_session") ?? ""), TimeSpan.FromHours(1)), new CookieOptions
         { HttpOnly = true, Secure = Request.IsHttps, SameSite = SameSiteMode.Lax, Path = "/rental-media", MaxAge = TimeSpan.FromHours(1) });
         Response.Headers.CacheControl = "private, no-store";
         var s = host.Settings(Tenant);
@@ -30,7 +30,6 @@ public sealed class RentalAccountController(RentalCatalog catalog, RentalTenantH
     [HttpPut("settings")]
     public async Task<IActionResult> Settings(SettingsRequest input, CancellationToken ct)
     {
-        if (Tenant.Legacy) return BadRequest("Tài khoản chủ đang giữ cấu hình cũ. Cấu hình khách thuê được quản lý riêng trên trang này.");
         var row = await catalog.Tenants.SingleAsync(t => t.Id == Tenant.Id, ct);
         var old = host.Settings(row);
         var token = input.ClearTelegram ? "" : string.IsNullOrWhiteSpace(input.TelegramToken) ? old.TelegramToken : input.TelegramToken.Trim();
@@ -38,7 +37,7 @@ public sealed class RentalAccountController(RentalCatalog catalog, RentalTenantH
         // One bot per customer prevents competing getUpdates consumers and mixed notifications.
         foreach (var other in await catalog.Tenants.AsNoTracking().Where(t => t.Id != row.Id).ToListAsync(ct))
             if (token.Length > 0 && host.Settings(other).TelegramToken == token) return Conflict("Bot Telegram đã được sử dụng bởi tài khoản khác.");
-        row.ProtectedSettings = host.Protect(new(input.BrowserEnabled, token, input.TelegramOwnerId));
+        row.ProtectedSettings = host.Protect(new(input.BrowserEnabled, token, input.TelegramOwnerId, true));
         row.BotHash = RentalTenantHost.BotFingerprint(token);
         try { await catalog.SaveChangesAsync(ct); }
         catch (DbUpdateException) { return Conflict("Bot Telegram đã được sử dụng hoặc cấu hình chưa lưu được."); }
@@ -51,6 +50,12 @@ public sealed class RentalAccountController(RentalCatalog catalog, RentalTenantH
     {
         var user = await users.FindByIdAsync(Tenant.UserId.ToString());
         var result = await users.ChangePasswordAsync(user!, input.OldPassword, input.NewPassword);
+        if (result.Succeeded)
+        {
+            var row = await catalog.Tenants.SingleAsync(t => t.Id == Tenant.Id);
+            row.TokensValidAfter = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            await catalog.SaveChangesAsync();
+        }
         return result.Succeeded ? Ok() : BadRequest(string.Join("; ", result.Errors.Select(e => e.Description)));
     }
     [HttpGet("customers")]
@@ -108,15 +113,23 @@ public sealed class RentalAccountController(RentalCatalog catalog, RentalTenantH
         var user = await users.FindByIdAsync(row.UserId.ToString());
         if (user is null) return NotFound();
         var result = await users.ResetPasswordAsync(user, await users.GeneratePasswordResetTokenAsync(user), input.Password);
+        if (result.Succeeded) { row.TokensValidAfter = DateTimeOffset.UtcNow.ToUnixTimeSeconds(); await catalog.SaveChangesAsync(ct); }
         return result.Succeeded ? Ok() : BadRequest(string.Join("; ", result.Errors.Select(e => e.Description)));
     }
     [HttpPost("facebook/start")]
-    public async Task<IActionResult> StartLogin() { await Runtime.Browser.BeginRemoteLogin(); return Ok(); }
+    public async Task<IActionResult> StartLogin()
+    {
+        if (!Runtime.Options.BrowserEnabled) return BadRequest("Bật và lưu cấu hình Facebook trước.");
+        if (Runtime.Messenger.Snapshot().State == "Queued") return Conflict("Chờ worker mở hội thoại thiết lập Messenger rồi thử lại.");
+        await Runtime.Browser.BeginRemoteLogin(Runtime.Messenger.Snapshot().State == "Running");
+        return Ok();
+    }
     [HttpGet("facebook/screen")]
     public async Task<IActionResult> Screen()
     {
         Response.Headers.CacheControl = "private, no-store";
-        return File(await Runtime.Browser.RemoteScreen(), "image/jpeg");
+        try { return File(await Runtime.Browser.RemoteScreen(), "image/jpeg"); }
+        catch (ArgumentException) { return Conflict("Phiên điều khiển đã kết thúc. Mở lại kết nối Facebook."); }
     }
     public record BrowserInput([Required] string Kind, int X = 0, int Y = 0, [MaxLength(1000)] string Text = "");
     [HttpPost("facebook/input")]
@@ -124,6 +137,8 @@ public sealed class RentalAccountController(RentalCatalog catalog, RentalTenantH
     {
         try { await Runtime.Browser.RemoteInput(input.Kind, input.X, input.Y, input.Text); return Ok(); }
         catch (ArgumentException) { return BadRequest(); }
+        // Browser call logs may contain typed text; do not pass these exceptions to request logging.
+        catch (Microsoft.Playwright.PlaywrightException) { return StatusCode(502, "Không điều khiển được phiên Facebook. Hãy mở lại kết nối."); }
     }
     [HttpPost("facebook/finish")]
     public IActionResult FinishLogin() { Runtime.Browser.EndRemoteLogin(); return Ok(); }

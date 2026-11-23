@@ -1,5 +1,22 @@
 ﻿# AI TOOL — trợ lý cho thuê phòng qua Telegram
 
+## Máy chủ cho thuê nhiều khách hàng
+
+Bản API SQL Server + Next.js dùng tài khoản đăng nhập thay cho `X-Rental-Key`. Chế độ desktop bên dưới vẫn dành cho một người trên một máy.
+
+1. Khởi động lại API với code mới, mở `/rental-assistant` hoặc `/dashboard`, đăng nhập bằng tài khoản quản trị hiện có. Vào **Tài khoản & khách thuê** để tạo khách, đặt hạn sử dụng, khóa/mở khóa và gia hạn.
+2. Khách đăng nhập tại `/rental-assistant`, vào **Cấu hình của tôi**, bật trình duyệt riêng, lưu bot Telegram và numeric user ID của mình. Mỗi khách dùng một bot riêng.
+3. Chọn **Kết nối Facebook**. Bấm ô trên ảnh trình duyệt, nhập email/mật khẩu/mã xác minh bằng thanh nhập bên dưới, rồi chọn **Nhập vào Facebook**. Facebook xử lý đăng nhập và xác minh. Chọn **Xong — tiếp tục worker** khi hoàn tất; phiên điều khiển hết sau 10 phút. Worker chờ trong thời gian này.
+4. Thêm phòng, ảnh, nhóm và duyệt bài, sau đó bật trợ lý. Tài khoản mới bắt đầu tạm dừng và không nhận bot hoặc phiên Facebook của chủ.
+
+Chủ hệ thống mặc định là tài khoản Identity `admin`; có thể đặt `RentalSaas:OwnerUserName` trước lần khởi động đầu. Dữ liệu cũ được giữ trong schema `rental` và gắn với chủ này. Mỗi khách có schema SQL `customer_<GUID>` riêng cho phòng, nhóm, bài đăng, hàng đợi, hội thoại và lịch hẹn. API xác định không gian từ tài khoản đã xác thực, không lấy tenant ID do trình duyệt gửi. Khách bị chặn khỏi các API quản trị cũ. Mật khẩu chung từng bỏ qua kiểm tra tài khoản đã được gỡ bỏ.
+
+Phiên Facebook, ảnh và bộ nhận diện Messenger nằm trong `App_Data/customers/<GUID>/` dưới thư mục nội dung API. Token Telegram được bảo vệ bằng ASP.NET Data Protection. Sao lưu **cơ sở dữ liệu, thư mục khách và `App_Data/protection-keys` tại thư mục chạy API**; mất khóa bảo vệ sẽ không đọc được token đã lưu. Không đưa các thư mục này vào Git hoặc web tĩnh. Khóa/hết hạn chặn request ngay; bộ điều phối dừng worker và yêu cầu hủy tác vụ đang chạy. Đổi/reset mật khẩu vô hiệu hóa JWT cũ của API trợ lý.
+
+Khi triển khai Internet: dùng HTTPS, đặt đúng `NEXT_PUBLIC_API_URL`, `AllowedOrigins`, khóa ký JWT riêng và đổi mật khẩu quản trị mặc định. Frontend và API nên cùng miền hoặc hai tên miền con cùng site để ảnh riêng dùng cookie HttpOnly. Cài Chromium Playwright trên máy chủ; tài khoản SQL của dịch vụ cần quyền tạo schema/bảng để cấp không gian khách. Bản này cấp/gia hạn thủ công, gồm quyền chủ hệ thống và khách thuê, mỗi khách một phiên Facebook. Chưa tích hợp thanh toán, gói hạn mức hoặc nhiều nhân viên trong cùng khách hàng. Chi phí AI dùng cấu hình máy chủ.
+
+Kiểm tra: `dotnet run --project API/RentalAssistant.Checks`; thêm `-- --saas-integration` để thử cách ly bằng hai schema SQL tạm. Bộ kiểm tra `--saas-http` dùng API thử cổng 5119, bắt buộc khởi động API với `--environment Development --Kestrel:Endpoints:Http:Url=http://localhost:5119 --RentalSaas:RunWorkers=false` để không đăng bài, đọc Messenger hoặc gửi Telegram thật. Không dùng `RunWorkers=false` cho dịch vụ đang khai thác.
+
 ## Chạy ngay trên máy Windows
 
 **Bấm `Start-AI-Tool.cmd` ở thư mục gốc.** Bản biên dịch sẵn nằm trong `dist/AI_TOOL`. Script mở ứng dụng và trình duyệt tại `http://127.0.0.1:5112/rental-desktop/`, tự đăng nhập bằng khóa quản lý cục bộ. Giữ cửa sổ chạy mở khi muốn bot hoạt động; nhấn Ctrl+C để tắt.

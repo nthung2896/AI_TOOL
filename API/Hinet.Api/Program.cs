@@ -46,7 +46,7 @@ internal class Program
             RentalBootstrap.InitializeAsync(setup.Services).GetAwaiter().GetResult();
             return;
         }
-        builder.WebHost.UseUrls("http://0.0.0.0:5111");
+        builder.WebHost.UseUrls(builder.Configuration["urls"] ?? "http://0.0.0.0:5111");
 
         Log.Logger = new LoggerConfiguration()
             .WriteTo.File("Logs/log-.txt", rollingInterval: RollingInterval.Day)

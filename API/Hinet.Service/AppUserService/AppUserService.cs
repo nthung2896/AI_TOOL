@@ -229,6 +229,7 @@ namespace Hinet.Service.AppUserService
             var claims = new List<Claim>
             {
                 new Claim(ClaimTypes.NameIdentifier, user.Id.ToString(), nameof(Guid)),
+                new Claim("rental_session", user.SecurityStamp ?? ""),
                 new Claim(ClaimTypes.Locality, user.DonViId.ToString(), nameof(Guid)),
             };
 

@@ -132,8 +132,8 @@ namespace Hinet.Api
             services.AddDependencyInjection();
 
             services.AddIdentity<AppUser, AppRole>()
-                 .AddEntityFrameworkStores<HinetContext>();
-            //.AddDefaultTokenProviders();
+                 .AddEntityFrameworkStores<HinetContext>()
+                .AddDefaultTokenProviders();
 
             services.AddAuthentication(options =>
             {

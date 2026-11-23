@@ -17,6 +17,7 @@ void Check(bool pass, string name) { if (!pass) throw new Exception("FAILED: " +
 if (args.Contains("--messenger-setup-only")) { await MessengerSetupChecks.Run(Check); return; }
 if (args.Contains("--photo-upload-only")) { await PhotoUploadChecks.Run(Check); return; }
 if (args.Contains("--saas-integration")) { await SaasChecks.Integration(Check); return; }
+if (args.Contains("--saas-http")) { await SaasHttpChecks.Run(Check); return; }
 SaasChecks.Run(Check);
 SqlServerChecks.Run(Check);
 EngagementChecks.Run(Check);

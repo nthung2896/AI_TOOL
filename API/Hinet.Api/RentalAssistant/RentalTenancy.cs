@@ -24,6 +24,7 @@ public sealed class RentalTenant
     public DateTimeOffset ExpiresAt { get; set; }
     public string ProtectedSettings { get; set; } = "";
     public string? BotHash { get; set; }
+    public long? TokensValidAfter { get; set; }
     public bool Active => Enabled && ExpiresAt > DateTimeOffset.UtcNow;
     public string Schema => Legacy ? "rental" : "customer_" + Id.ToString("N");
 }
@@ -36,13 +37,14 @@ public sealed class RentalCatalog(DbContextOptions<RentalCatalog> options) : DbC
         b.Entity<RentalTenant>().ToTable("Customers", "rental");
         b.Entity<RentalTenant>().Ignore(x => x.Active).Ignore(x => x.Schema);
         b.Entity<RentalTenant>().HasIndex(x => x.UserId).IsUnique();
+        b.Entity<RentalTenant>().HasIndex(x => x.Legacy).IsUnique().HasFilter("[Legacy] = 1");
         b.Entity<RentalTenant>().Property(x => x.Name).HasMaxLength(150);
         b.Entity<RentalTenant>().Property(x => x.BotHash).HasMaxLength(64);
         b.Entity<RentalTenant>().HasIndex(x => x.BotHash).IsUnique().HasFilter("[BotHash] IS NOT NULL");
     }
 }
 
-public record RentalCustomerSettings(bool BrowserEnabled = false, string TelegramToken = "", long TelegramOwnerId = 0);
+public record RentalCustomerSettings(bool BrowserEnabled = false, string TelegramToken = "", long TelegramOwnerId = 0, bool Configured = false);
 
 public sealed class RentalSchemaCacheKey : IModelCacheKeyFactory
 {
@@ -87,8 +89,15 @@ public sealed class RentalTenantHost(IServiceProvider services, IConfiguration c
     private readonly SemaphoreSlim gate = new(1);
     public IDataProtector Protector { get; } = protection.CreateProtector("AI_TOOL.CustomerSettings.v1");
     public ITimeLimitedDataProtector MediaProtector { get; } = protection.CreateProtector("AI_TOOL.CustomerMedia.v1").ToTimeLimitedDataProtector();
-    public RentalCustomerSettings Settings(RentalTenant tenant) => string.IsNullOrEmpty(tenant.ProtectedSettings)
-        ? new() : JsonSerializer.Deserialize<RentalCustomerSettings>(Protector.Unprotect(tenant.ProtectedSettings)) ?? new();
+    public RentalCustomerSettings Settings(RentalTenant tenant)
+    {
+        var saved = string.IsNullOrEmpty(tenant.ProtectedSettings) ? new() : JsonSerializer.Deserialize<RentalCustomerSettings>(Protector.Unprotect(tenant.ProtectedSettings)) ?? new RentalCustomerSettings();
+        if (!tenant.Legacy || saved.Configured) return saved;
+        // Preserve environment-specific owner settings until the owner explicitly saves
+        // the web form. Starting a staging/test process must not replace production secrets.
+        var legacy = config.GetSection("RentalAssistant").Get<RentalOptions>() ?? new();
+        return new(legacy.BrowserEnabled, legacy.TelegramToken, legacy.TelegramOwnerId);
+    }
     public string Protect(RentalCustomerSettings settings) => Protector.Protect(JsonSerializer.Serialize(settings));
     public static string CustomerDirectory(string root, RentalTenant tenant) => Path.Combine(root, "App_Data", "customers", tenant.Id.ToString("N"));
 
@@ -102,12 +111,12 @@ public sealed class RentalTenantHost(IServiceProvider services, IConfiguration c
             var o = config.GetSection("RentalAssistant").Get<RentalOptions>() ?? new();
             var directory = CustomerDirectory(env.ContentRootPath, tenant);
             Directory.CreateDirectory(directory);
+            var settings = Settings(tenant);
+            o.BrowserEnabled = settings.BrowserEnabled;
+            o.TelegramToken = settings.TelegramToken;
+            o.TelegramOwnerId = settings.TelegramOwnerId;
             if (!tenant.Legacy)
             {
-                var settings = Settings(tenant);
-                o.BrowserEnabled = settings.BrowserEnabled;
-                o.TelegramToken = settings.TelegramToken;
-                o.TelegramOwnerId = settings.TelegramOwnerId;
                 o.ProfilePath = Path.Combine(directory, "facebook-profile");
                 o.MessengerSettingsPath = Path.Combine(directory, "messenger-selectors.json");
                 o.IncomingMessages = ""; o.OutgoingMessages = "";
@@ -115,6 +124,7 @@ public sealed class RentalTenantHost(IServiceProvider services, IConfiguration c
             o.Schema = tenant.Schema;
             o.Headless = !tenant.Legacy;
             o.AccountExpiresAt = tenant.ExpiresAt;
+            o.AccountId = tenant.Id;
             o.Enabled = true;
             o.ManagementKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)); // Internal worker guard only, never exposed.
             RentalMessengerSetup.Load(o.MessengerSettingsPath ?? Path.Combine(env.ContentRootPath, "App_Data", "messenger-selectors.json"), o);
@@ -146,7 +156,7 @@ public sealed class RentalTenantHost(IServiceProvider services, IConfiguration c
             var worker = new RentalWorker(factory, opts, ai, browser, services.GetRequiredService<ILogger<RentalWorker>>(), messenger, discovery, status);
             var runtime = new RentalCustomerRuntime { Tenant = tenant, Options = o, Factory = factory, Browser = browser, Ai = ai, Media = media, Messenger = messenger, Discovery = discovery, Status = status, Worker = worker };
             runtimes[tenant.Id] = runtime;
-            await worker.StartAsync(CancellationToken.None);
+            if (config.GetValue("RentalSaas:RunWorkers", true)) await worker.StartAsync(CancellationToken.None);
             return runtime;
         }
         finally { gate.Release(); }
@@ -169,14 +179,19 @@ public sealed class RentalTenantHost(IServiceProvider services, IConfiguration c
                     Name nvarchar(150) NOT NULL, Enabled bit NOT NULL, Legacy bit NOT NULL, ExpiresAt datetimeoffset NOT NULL,
                     ProtectedSettings nvarchar(max) NOT NULL, CONSTRAINT UQ_RentalCustomer_User UNIQUE(UserId));
                 IF COL_LENGTH(N'rental.Customers', N'BotHash') IS NULL ALTER TABLE rental.Customers ADD BotHash nvarchar(64) NULL;
+                IF COL_LENGTH(N'rental.Customers', N'TokensValidAfter') IS NULL ALTER TABLE rental.Customers ADD TokensValidAfter bigint NULL;
                 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name=N'UX_RentalCustomer_Bot' AND object_id=OBJECT_ID(N'rental.Customers'))
                     CREATE UNIQUE INDEX UX_RentalCustomer_Bot ON rental.Customers(BotHash) WHERE BotHash IS NOT NULL;
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name=N'UX_RentalCustomer_Legacy' AND object_id=OBJECT_ID(N'rental.Customers'))
+                    CREATE UNIQUE INDEX UX_RentalCustomer_Legacy ON rental.Customers(Legacy) WHERE Legacy = 1;
                 """, ct);
             // Adopt the existing installation once, for the explicitly configured owner only.
             var ownerName = config["RentalSaas:OwnerUserName"] ?? "admin";
             var owner = await scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>().FindByNameAsync(ownerName);
+            if (owner is null) throw new InvalidOperationException("RentalSaas:OwnerUserName must identify an existing account. Initialize account tables first.");
             if (owner is not null && !await db.Tenants.AnyAsync(x => x.UserId == owner.Id, ct))
             {
+                if (await db.Tenants.AnyAsync(x => x.Legacy, ct)) throw new InvalidOperationException("Existing owner workspace already adopted. Transfer ownership explicitly before changing OwnerUserName.");
                 var legacy = config.GetSection("RentalAssistant").Get<RentalOptions>() ?? new();
                 db.Tenants.Add(new() { UserId = owner.Id, Name = "Chủ hệ thống", Legacy = true, ExpiresAt = DateTimeOffset.UtcNow.AddYears(100),
                     ProtectedSettings = Protect(new(legacy.BrowserEnabled, legacy.TelegramToken, legacy.TelegramOwnerId)), BotHash = BotFingerprint(legacy.TelegramToken) });
@@ -215,8 +230,13 @@ public sealed class RentalTenantMiddleware(RequestDelegate next)
             try
             {
                 var value = host.MediaProtector.Unprotect(mediaCookie);
-                if (value.StartsWith("media:") && Guid.TryParse(value[6..], out var id))
-                    ctx.User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim(ClaimTypes.NameIdentifier, id.ToString()) }, "CustomerMedia"));
+                var parts = value.Split(':');
+                if (parts.Length is 3 or 4 && parts[0] == "media" && Guid.TryParse(parts[1], out var id) && long.TryParse(parts[2], out _))
+                {
+                    var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, id.ToString()), new("iat", parts[2]) };
+                    if (parts.Length == 4 && parts[3].Length > 0) claims.Add(new("rental_session", parts[3]));
+                    ctx.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "CustomerMedia"));
+                }
             }
             catch (CryptographicException) { }
         }
@@ -230,15 +250,19 @@ public sealed class RentalTenantMiddleware(RequestDelegate next)
         if (user is null || user.IsDeleted || await users.IsLockedOutAsync(user)) { ctx.Response.StatusCode = 403; return; }
         var owner = string.Equals(user.NormalizedUserName, (config["RentalSaas:OwnerUserName"] ?? "admin").ToUpperInvariant(), StringComparison.Ordinal);
         ctx.Items["RentalOwner"] = owner;
+        var tenant = await catalog.Tenants.AsNoTracking().SingleOrDefaultAsync(x => x.UserId == userId, ctx.RequestAborted);
+        if (tenant is null || !tenant.Active) { ctx.Response.StatusCode = 403; await ctx.Response.WriteAsync("Tài khoản chưa kích hoạt, đã khóa hoặc hết hạn."); return; }
+        var stamp = ctx.User.FindFirstValue("rental_session");
+        if (stamp is not null ? !string.Equals(stamp, user.SecurityStamp, StringComparison.Ordinal)
+            : tenant.TokensValidAfter is long cutoff && (!long.TryParse(ctx.User.FindFirstValue("iat"), out var issued) || issued <= cutoff))
+        { ctx.Response.StatusCode = 401; return; }
+        ctx.Items["RentalTenant"] = tenant;
         if (!isRental)
         {
             // Rental customers cannot reach the pre-existing administration APIs.
             if (!owner && !path.Equals("/api/Account/GetInfo", StringComparison.OrdinalIgnoreCase) && !path.Equals("/api/Account/Logout", StringComparison.OrdinalIgnoreCase)) { ctx.Response.StatusCode = 403; return; }
             await next(ctx); return;
         }
-        var tenant = await catalog.Tenants.AsNoTracking().SingleOrDefaultAsync(x => x.UserId == userId, ctx.RequestAborted);
-        if (tenant is null || !tenant.Active) { ctx.Response.StatusCode = 403; await ctx.Response.WriteAsync("Tài khoản chưa kích hoạt, đã khóa hoặc hết hạn."); return; }
-        ctx.Items["RentalTenant"] = tenant;
         // Administration endpoints do not need to start a customer's browser or worker.
         if (!path.StartsWith("/api/rental-account", StringComparison.OrdinalIgnoreCase) || path.StartsWith("/api/rental-account/facebook", StringComparison.OrdinalIgnoreCase))
             ctx.Items["RentalRuntime"] = await host.Get(tenant, ctx.RequestAborted);

@@ -10,6 +10,7 @@ public class RentalOptions
     public string? MessengerSettingsPath { get; set; }
     public bool Headless { get; set; }
     public DateTimeOffset? AccountExpiresAt { get; set; }
+    public Guid? AccountId { get; set; }
     public string AiMode { get; set; } = "api";
     public bool Enabled { get; set; }
     public string ManagementKey { get; set; } = "";

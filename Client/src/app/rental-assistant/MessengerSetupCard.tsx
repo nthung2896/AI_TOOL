@@ -26,6 +26,7 @@ export default function MessengerSetupCard({ threads, api }: Props) {
     </form>
     <ol className="ra-messenger-steps"><li>Mở hội thoại có sẵn tin của cả hai phía.</li><li>Trong Chromium, bấm nội dung một tin <b>khách gửi</b>, rồi một tin <b>bạn gửi</b>.</li><li>Ứng dụng tải lại hội thoại để kiểm tra ID và chiều tin; chỉ lưu khi kiểm tra đạt.</li></ol>
     {status?.message && <p role="status" className={status.state === "Completed" ? "ra-success" : "ra-messenger-setup-status"}>{status.state === "Completed" && <CheckCircleOutlined aria-hidden />} {status.message}</p>}
+    {status?.state === "Running" && <p><a href="#settings">Mở Cấu hình của tôi → Kết nối Facebook để chọn hai tin mẫu ngay trên web.</a> Sau khi chọn xong, bấm “Xong — tiếp tục worker” để kiểm tra và lưu.</p>}
     {error && <p role="alert" className="ra-error">{error}</p>}
     <small className="ra-muted">Phiên thiết lập hết hạn sau 5 phút. Nếu Messenger yêu cầu PIN, hãy hủy phiên, mở khóa lịch sử trong Chromium rồi thiết lập lại. Lịch sử cũ được lấy làm mốc; bot chỉ báo những tin mới sau đó. Nếu Messenger không cung cấp ID ổn định, cấu hình sẽ không được lưu.</small>
   </section>;

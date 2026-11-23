@@ -91,9 +91,18 @@ static class SaasChecks
                 var tables = new[] { "Appointments", "Deliveries", "Posts", "Threads", "Groups", "Rooms", "State" };
                 foreach (var table in tables) await RentalSchemaUpgrade.ExecuteLiteralAsync(db, $"DROP TABLE IF EXISTS [{tenant.Schema}].[{table}];");
                 await RentalSchemaUpgrade.ExecuteLiteralAsync(db, $"IF SCHEMA_ID(N'{tenant.Schema}') IS NOT NULL EXEC(N'DROP SCHEMA [{tenant.Schema}]');");
+                DeleteTestDirectory(env.ContentRootPath, tenant);
             }
             await services.DisposeAsync();
         }
+    }
+    internal static void DeleteTestDirectory(string root, RentalTenant tenant)
+    {
+        if (tenant.Legacy) throw new InvalidOperationException();
+        var parent = Path.GetFullPath(Path.Combine(root, "App_Data", "customers")) + Path.DirectorySeparatorChar;
+        var target = Path.GetFullPath(RentalTenantHost.CustomerDirectory(root, tenant));
+        if (!target.StartsWith(parent, StringComparison.OrdinalIgnoreCase) || Path.GetFileName(target) != tenant.Id.ToString("N")) throw new InvalidOperationException();
+        if (Directory.Exists(target)) Directory.Delete(target, true);
     }
     private sealed class TestEnvironment : IWebHostEnvironment
     {
