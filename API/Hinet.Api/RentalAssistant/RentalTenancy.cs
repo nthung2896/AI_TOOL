@@ -197,6 +197,7 @@ public sealed class RentalTenantHost(IServiceProvider services, IConfiguration c
                     ProtectedSettings = Protect(new(legacy.BrowserEnabled, legacy.TelegramToken, legacy.TelegramOwnerId)), BotHash = BotFingerprint(legacy.TelegramToken) });
                 await db.SaveChangesAsync(ct);
             }
+            await scope.ServiceProvider.GetRequiredService<RentalAdministration>().Seed(await db.Tenants.Where(t => !t.Legacy).Select(t => t.UserId).ToListAsync(ct), ct);
         }
         try
         {
@@ -220,7 +221,7 @@ public sealed class RentalTenantHost(IServiceProvider services, IConfiguration c
 
 public sealed class RentalTenantMiddleware(RequestDelegate next)
 {
-    public async Task InvokeAsync(HttpContext ctx, RentalCatalog catalog, RentalTenantHost host, UserManager<AppUser> users, IConfiguration config)
+    public async Task InvokeAsync(HttpContext ctx, RentalCatalog catalog, RentalTenantHost host, UserManager<AppUser> users, IConfiguration config, RentalAdministration administration)
     {
         var path = ctx.Request.Path.Value ?? "";
         if (!path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) && !path.StartsWith("/rental-media", StringComparison.OrdinalIgnoreCase)) { await next(ctx); return; }
@@ -251,7 +252,20 @@ public sealed class RentalTenantMiddleware(RequestDelegate next)
         var owner = string.Equals(user.NormalizedUserName, (config["RentalSaas:OwnerUserName"] ?? "admin").ToUpperInvariant(), StringComparison.Ordinal);
         ctx.Items["RentalOwner"] = owner;
         var tenant = await catalog.Tenants.AsNoTracking().SingleOrDefaultAsync(x => x.UserId == userId, ctx.RequestAborted);
-        if (tenant is null || !tenant.Active) { ctx.Response.StatusCode = 403; await ctx.Response.WriteAsync("Tài khoản chưa kích hoạt, đã khóa hoặc hết hạn."); return; }
+        if (tenant is null)
+        {
+            // Existing administration accounts do not need a rental workspace.
+            // They still require explicit grants, and cannot access a customer's APIs.
+            var session = ctx.User.FindFirstValue("rental_session");
+            if (session is not null && !string.Equals(session, user.SecurityStamp, StringComparison.Ordinal)) { ctx.Response.StatusCode = 401; return; }
+            var grants = await administration.Grants(userId, ctx.RequestAborted);
+            var ownAdministrationMenu = path.Equals("/api/rental-account/administration", StringComparison.OrdinalIgnoreCase);
+            var ownAccount = path.Equals("/api/Account/GetInfo", StringComparison.OrdinalIgnoreCase) || path.Equals("/api/Account/Logout", StringComparison.OrdinalIgnoreCase);
+            if (grants.Count > 0 && (ownAdministrationMenu || !isRental && (ownAccount || grants.Any(grant => RentalAdministration.Matches(path, grant)))))
+            { await next(ctx); return; }
+            ctx.Response.StatusCode = 403; return;
+        }
+        if (!tenant.Active) { ctx.Response.StatusCode = 403; await ctx.Response.WriteAsync("Tài khoản chưa kích hoạt, đã khóa hoặc hết hạn."); return; }
         var stamp = ctx.User.FindFirstValue("rental_session");
         if (stamp is not null ? !string.Equals(stamp, user.SecurityStamp, StringComparison.Ordinal)
             : tenant.TokensValidAfter is long cutoff && (!long.TryParse(ctx.User.FindFirstValue("iat"), out var issued) || issued <= cutoff))
@@ -259,8 +273,12 @@ public sealed class RentalTenantMiddleware(RequestDelegate next)
         ctx.Items["RentalTenant"] = tenant;
         if (!isRental)
         {
-            // Rental customers cannot reach the pre-existing administration APIs.
-            if (!owner && !path.Equals("/api/Account/GetInfo", StringComparison.OrdinalIgnoreCase) && !path.Equals("/api/Account/Logout", StringComparison.OrdinalIgnoreCase)) { ctx.Response.StatusCode = 403; return; }
+            // Explicit existing user/role API grants are required for delegated administration.
+            if (!owner && !path.Equals("/api/Account/GetInfo", StringComparison.OrdinalIgnoreCase) && !path.Equals("/api/Account/Logout", StringComparison.OrdinalIgnoreCase))
+            {
+                var grants = await administration.Grants(userId, ctx.RequestAborted);
+                if (!grants.Any(grant => RentalAdministration.Matches(path, grant))) { ctx.Response.StatusCode = 403; return; }
+            }
             await next(ctx); return;
         }
         // Administration endpoints do not need to start a customer's browser or worker.
@@ -275,6 +293,8 @@ public static class RentalTenancyRegistration
     public static void AddRentalTenancy(this IServiceCollection services, IConfiguration config)
     {
         services.AddHttpContextAccessor();
+        services.AddScoped<RentalAdministration>();
+        services.AddScoped<RentalCustomerService>();
         services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(Path.GetFullPath("App_Data"), "protection-keys"))).SetApplicationName("AI_TOOL");
         services.AddDbContext<RentalCatalog>(o => o.UseSqlServer(config["Connections:DefaultConnection"]));
         services.AddSingleton<RentalTenantHost>();

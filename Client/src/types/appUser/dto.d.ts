@@ -26,6 +26,7 @@ export interface AppUserType {
   vaiTro_response?: string;
   vaiTro_txt_response?: string[];
   groupRole_txt?: string;
+  nhomNguoi_txt?: string[];
   department_txt?: string;
   lockoutEnabled: boolean;
   departmentId: string;

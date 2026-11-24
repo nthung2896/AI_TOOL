@@ -218,6 +218,7 @@ const QLModule: React.FC = () => {
   ];
 
   const hanleCreateEditSuccess = () => {
+    window.dispatchEvent(new Event("rental-menu-changed"));
     handleGetListModule();
   };
 
@@ -225,6 +226,7 @@ const QLModule: React.FC = () => {
     try {
       const response = await moduleService.delete(id);
       if (response.status) {
+        window.dispatchEvent(new Event("rental-menu-changed"));
         message.success("Xóa chức năng thành công");
         handleGetListModule();
       } else {

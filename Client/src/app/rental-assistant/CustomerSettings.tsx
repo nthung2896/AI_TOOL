@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type CustomerAccount = { id: string; name: string; expiresAt: string; enabled: boolean; isOwner: boolean; browserEnabled: boolean; telegramOwnerId: number; telegramConfigured: boolean; legacy: boolean };
-type Customer = CustomerAccount & { userName: string; active: boolean };
 export const accountBase = () => (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5111").replace(/\/$/, "");
 export async function accountApi(path: string, method = "GET", body?: unknown) {
   const token = sessionStorage.getItem("rental-access-token") || localStorage.getItem("AccessToken") || "";
@@ -20,19 +19,13 @@ export default function CustomerSettings({ account, onSaved }: { account: Custom
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [customers, setCustomers] = useState<Customer[]>([]);
   const [screen, setScreen] = useState("");
   const [remote, setRemote] = useState(false);
   const [text, setText] = useState("");
   const [secret, setSecret] = useState(true);
   const screenUrl = useRef("");
-  const [newCustomer, setNewCustomer] = useState({ name: "", userName: "", email: "", password: "", expiresAt: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10) });
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
-  const [resetCustomer, setResetCustomer] = useState("");
-  const [resetPassword, setResetPassword] = useState("");
-  const loadCustomers = useCallback(async () => { if (account.isOwner) setCustomers(await accountApi("customers")); }, [account.isOwner]);
-  useEffect(() => { void loadCustomers().catch(e => setError(e.message)); }, [loadCustomers]);
   async function run(work: () => Promise<unknown>, success = "Đã lưu.") {
     setBusy(true); setError(""); setMessage("");
     try { await work(); setMessage(success); } catch (e) { setError(e instanceof Error ? e.message : "Không thực hiện được."); } finally { setBusy(false); }
@@ -70,8 +63,6 @@ export default function CustomerSettings({ account, onSaved }: { account: Custom
       {screen && <img src={screen} alt="Phiên đăng nhập Facebook riêng" onClick={e => { const rect = e.currentTarget.getBoundingClientRect(); void run(() => input("click", "", Math.floor((e.clientX - rect.left) * 1100 / rect.width), Math.floor((e.clientY - rect.top) * 760 / rect.height)), "Đã chọn vị trí."); }} />}
       <div className="ra-remote-tools"><input aria-label="Nội dung nhập vào ô Facebook đã chọn" type={secret ? "password" : "text"} autoComplete="off" value={text} onChange={e => setText(e.target.value)} placeholder="Email, mật khẩu hoặc mã xác minh…" /><button disabled={busy || !text} onClick={() => run(async () => { const value = text; setText(""); await input("text", value); }, "Đã nhập.")}>Nhập vào Facebook</button><label className="ra-check"><input type="checkbox" checked={secret} onChange={e => setSecret(e.target.checked)} />Ẩn nội dung</label></div>
       <div className="ra-remote-tools">{["Tab", "Enter", "Backspace", "Control+A", "Escape"].map(key => <button className="ra-secondary" key={key} disabled={busy} onClick={() => run(() => input("key", key), "")}>{key === "Control+A" ? "Chọn hết" : key}</button>)}<button className="ra-secondary" onClick={() => run(() => input("scroll", "", 0, 500), "")}>Cuộn xuống</button><button className="ra-secondary" onClick={() => run(() => input("scroll", "", 0, -500), "")}>Cuộn lên</button></div></section>}
-    {account.isOwner && <><form className="ra-card" onSubmit={e => { e.preventDefault(); void run(async () => { await accountApi("customers", "POST", { ...newCustomer, expiresAt: new Date(newCustomer.expiresAt + "T23:59:59+07:00").toISOString() }); setNewCustomer({ ...newCustomer, name: "", userName: "", email: "", password: "" }); await loadCustomers(); }, "Đã cấp tài khoản. Khách đăng nhập tại /rental-assistant bằng tên và mật khẩu bạn vừa tạo."); }}><h2>Cấp tài khoản khách thuê</h2><div className="ra-customer-fields">{[["name", "Tên khách"], ["userName", "Tên đăng nhập"], ["email", "Email"], ["password", "Mật khẩu ban đầu"], ["expiresAt", "Sử dụng đến ngày"]].map(([key, label]) => <label key={key}>{label}<input required type={key === "password" ? "password" : key === "email" ? "email" : key === "expiresAt" ? "date" : "text"} autoComplete="off" minLength={key === "password" ? 8 : undefined} value={newCustomer[key as keyof typeof newCustomer]} onChange={e => setNewCustomer({ ...newCustomer, [key]: e.target.value })} /></label>)}</div><button disabled={busy}>Cấp tài khoản</button></form>
-      <section className="ra-card"><h2>Khách thuê · {customers.filter(c => !c.legacy).length}</h2>{customers.map(c => <div key={c.id} className="ra-customer-row"><div><b>{c.name}</b><p>{c.userName} · {c.legacy ? "Chủ hệ thống" : c.active ? "Đang hoạt động" : c.enabled ? "Đã hết hạn" : "Đã khóa"}</p></div>{!c.legacy && <><label>Hạn sử dụng<input aria-label={`Gia hạn ${c.name}`} type="date" value={c.expiresAt.slice(0, 10)} onChange={e => setCustomers(customers.map(x => x.id === c.id ? { ...x, expiresAt: e.target.value } : x))} /></label><button disabled={busy} onClick={() => run(async () => { await accountApi(`customers/${c.id}`, "PUT", { enabled: c.enabled, expiresAt: new Date(c.expiresAt.slice(0, 10) + "T23:59:59+07:00").toISOString() }); await loadCustomers(); })}>Lưu hạn</button><button disabled={busy} className="ra-secondary" onClick={() => run(async () => { await accountApi(`customers/${c.id}`, "PUT", { enabled: !c.enabled, expiresAt: c.expiresAt.length === 10 ? new Date(c.expiresAt + "T23:59:59+07:00").toISOString() : c.expiresAt }); await loadCustomers(); })}>{c.enabled ? "Khóa" : "Mở khóa"}</button></>}</div>)}</section></>}
-    {account.isOwner && customers.some(c => !c.legacy) && <form className="ra-card" onSubmit={e => { e.preventDefault(); void run(async () => { await accountApi(`customers/${resetCustomer}/password`, "PUT", { password: resetPassword }); setResetPassword(""); }, "Đã đặt lại mật khẩu khách. Các phiên đăng nhập cũ đã bị thu hồi."); }}><h2>Đặt lại mật khẩu khách</h2><div className="ra-customer-fields"><label>Khách thuê<select required value={resetCustomer} onChange={e => setResetCustomer(e.target.value)}><option value="">Chọn khách thuê</option>{customers.filter(c => !c.legacy).map(c => <option key={c.id} value={c.id}>{c.name} ({c.userName})</option>)}</select></label><label>Mật khẩu mới cho khách<input required type="password" minLength={8} maxLength={128} autoComplete="off" value={resetPassword} onChange={e => setResetPassword(e.target.value)} /></label></div><button disabled={busy || !resetCustomer}>Đặt lại mật khẩu</button></form>}
+    {account.isOwner && <section className="ra-card"><h2>Quản trị hệ thống</h2><p>Quản lý tài khoản khách thuê, vai trò và phân quyền trong phân hệ quản trị.</p><a href="/rental-customers">Mở quản lý tài khoản & khách thuê</a></section>}
   </div>;
 }

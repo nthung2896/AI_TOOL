@@ -14,6 +14,8 @@ using Microsoft.Extensions.Options;
 
 int checks = 0;
 void Check(bool pass, string name) { if (!pass) throw new Exception("FAILED: " + name); checks++; Console.WriteLine("PASS: " + name); }
+if (args.Contains("--rental-admin-only")) { await RentalAdministrationChecks.Run(Check); return; }
+if (args.Contains("--seed-rental-menu")) { await RentalAdministrationChecks.Run(Check, true); return; }
 if (args.Contains("--messenger-setup-only")) { await MessengerSetupChecks.Run(Check); return; }
 if (args.Contains("--photo-upload-only")) { await PhotoUploadChecks.Run(Check); return; }
 if (args.Contains("--saas-integration")) { await SaasChecks.Integration(Check); return; }

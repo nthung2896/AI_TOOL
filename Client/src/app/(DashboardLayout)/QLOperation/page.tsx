@@ -174,6 +174,7 @@ const QLOperation: React.FC = () => {
   ];
 
   const hanleCreateEditSuccess = () => {
+    window.dispatchEvent(new Event("rental-menu-changed"));
     handleGetListModule();
   };
 
@@ -181,6 +182,7 @@ const QLOperation: React.FC = () => {
     try {
       const response = await operationService.delete(id);
       if (response.status) {
+        window.dispatchEvent(new Event("rental-menu-changed"));
         message.success("Xóa thao tác thành công");
         handleGetListModule();
       } else {

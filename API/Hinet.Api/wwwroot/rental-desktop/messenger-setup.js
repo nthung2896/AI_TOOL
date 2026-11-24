@@ -28,22 +28,38 @@
     }
     const classes = [...node.classList].filter(c => c.length < 80);
     classes.forEach(c => list.push('.' + CSS.escape(c)));
+    // Messenger can put direction on a wrapper/bubble below the stable ID.
+    // Keep layout declarations only; text, colours and message IDs are not direction.
+    for (const property of ['align-self', 'align-items', 'justify-content', 'flex-direction', 'text-align']) {
+      const value = node.style.getPropertyValue(property).trim();
+      if (value) list.push(`[style*=${JSON.stringify(property + ': ' + value)}]`);
+    }
     for (let a = 0; a < Math.min(classes.length, 10); a++) for (let b = a + 1; b < Math.min(classes.length, 10); b++) list.push('.' + CSS.escape(classes[a]) + '.' + CSS.escape(classes[b]));
     return list;
   }
   function selectorFor(sample, opposite) {
     const candidates = [];
-    for (let node = sample.node, depth = 0; node && depth < 6; node = node.parentElement, depth++) {
+    function add(selector, token) {
+      try {
+        if (!sample.node.matches(selector) || opposite.node.matches(selector)) return;
+        if (candidates.some(candidate => candidate.selector === selector)) return;
+        const nodes = new Set(document.querySelectorAll(selector));
+        const count = nodes.size;
+        candidates.push({ selector, nodes, count, priority: token.startsWith('[data-') ? 10 : count > 1 ? 5 : 0 });
+      } catch { }
+    }
+    for (let node = sample.node, depth = 0; node && node !== document.body && depth < 12; node = node.parentElement, depth++) {
       for (const token of tokens(node)) {
         const selector = depth === 0 ? sample.base + token : token + ' ' + sample.base;
-        try {
-          if (!sample.node.matches(selector) || opposite.node.matches(selector)) continue;
-          const count = document.querySelectorAll(selector).length;
-          candidates.push({ selector, count, priority: token.startsWith('[data-') ? 10 : count > 1 ? 5 : 0 });
-        } catch { }
+        add(selector, token);
       }
     }
-    return candidates.sort((a,b) => b.priority-a.priority || b.count-a.count || a.selector.length-b.selector.length)[0]?.selector;
+    for (const node of sample.node.querySelectorAll('*')) {
+      // A quoted reply may contain another message; never use its direction.
+      if (node.closest(sample.base) !== sample.node) continue;
+      for (const token of tokens(node)) add(sample.base + ':has(' + token + ')', token);
+    }
+    return candidates.sort((a,b) => b.priority-a.priority || b.count-a.count || a.selector.length-b.selector.length);
   }
   function fail(text) {
     setup.result = { incomingMessages: '', outgoingMessages: '', messageIdAttribute: '', incomingId: '', outgoingId: '', error: text };
@@ -56,9 +72,17 @@
     if (!sample) { label('Chưa tìm thấy ID tin ổn định ở vị trí này. Thử bấm trực tiếp vào bong bóng tin nhắn. Nếu vẫn không được, hãy hủy thiết lập; ứng dụng sẽ không đoán ID từ nội dung.'); return; }
     if (!incoming) { incoming = sample; label('Bước 2/2: bấm vào nội dung một tin do BẠN gửi trong cùng hội thoại. Chỉ chọn tin có sẵn, không cần gửi tin mới.'); return; }
     if (incoming.node === sample.node || incoming.attr !== sample.attr || incoming.value === sample.value) { label('Hãy chọn một tin KHÁC do bạn gửi, cùng hội thoại.'); return; }
-    const incomingSelector = selectorFor(incoming, sample), outgoingSelector = selectorFor(sample, incoming);
-    if (!incomingSelector || !outgoingSelector) return fail('Không tìm được đặc điểm DOM phân biệt hai chiều tin. Không lưu cấu hình; cần kiểm tra cấu trúc Messenger trên máy này.');
-    if ([...document.querySelectorAll(incomingSelector)].some(node => node.matches(outgoingSelector))) return fail('Hai bộ nhận diện bị trùng. Không lưu cấu hình.');
+    const incomingCandidates = selectorFor(incoming, sample), outgoingCandidates = selectorFor(sample, incoming);
+    if (!incomingCandidates.length || !outgoingCandidates.length) return fail('Không tìm được đặc điểm DOM phân biệt hai chiều tin. Không lưu cấu hình; cần kiểm tra cấu trúc Messenger trên máy này.');
+    // Select directions together: the best individual selectors can overlap on
+    // a third message (for example a photo or a quoted reply).
+    let pair;
+    for (const left of incomingCandidates) {
+      const right = outgoingCandidates.find(candidate => ![...left.nodes].some(node => candidate.nodes.has(node)));
+      if (right) { pair = [left.selector, right.selector]; break; }
+    }
+    if (!pair) return fail('Chưa tìm được hai bộ nhận diện không trùng trên các tin đang hiển thị. Không lưu cấu hình.');
+    const [incomingSelector, outgoingSelector] = pair;
     setup.result = { incomingMessages: incomingSelector, outgoingMessages: outgoingSelector, messageIdAttribute: incoming.attr, incomingId: incoming.value, outgoingId: sample.value, error: '' };
     document.removeEventListener('click', click, true);
     label('Đã chọn đủ hai mẫu. Ứng dụng đang tải lại hội thoại để kiểm tra nhận diện trước khi lưu.');

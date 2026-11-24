@@ -16,6 +16,18 @@ public sealed class RentalAccountController(RentalCatalog catalog, RentalTenantH
     private bool Owner => HttpContext.Items["RentalOwner"] is true;
     private RentalTenant Tenant => (RentalTenant)HttpContext.Items["RentalTenant"]!;
     private RentalCustomerRuntime Runtime => (RentalCustomerRuntime)HttpContext.Items["RentalRuntime"]!;
+    [HttpGet("administration")]
+    public async Task<IActionResult> Administration([FromServices] RentalAdministration administration, CancellationToken ct)
+    {
+        var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var grants = Owner ? new List<string> { "/api" } : await administration.Grants(userId, ct);
+        var modules = await administration.Menu(userId, Owner, ct);
+        var entries = modules.SelectMany(module => module.Entries).ToList();
+        var actions = new[] { "GetData", "Get", "Create", "Update", "Delete", "ResetPassword" }
+            .ToDictionary(action => action, action => grants.Any(g => RentalAdministration.Matches("/api/RentalCustomer/" + action, g)));
+        Response.Headers.CacheControl = "private, no-store";
+        return Ok(new { modules, entries, customerActions = actions });
+    }
     [HttpGet("me")]
     public IActionResult Me()
     {
@@ -74,7 +86,7 @@ public sealed class RentalAccountController(RentalCatalog catalog, RentalTenantH
     public record CreateCustomer([Required, MaxLength(150)] string Name, [Required, MaxLength(100)] string UserName,
         [Required, EmailAddress] string Email, [Required, MinLength(8), MaxLength(128)] string Password, DateTimeOffset ExpiresAt);
     [HttpPost("customers")]
-    public async Task<IActionResult> Create(CreateCustomer input, CancellationToken ct)
+    public async Task<IActionResult> Create(CreateCustomer input, [FromServices] RentalAdministration administration, CancellationToken ct)
     {
         if (!Owner) return Forbid();
         if (input.ExpiresAt <= DateTimeOffset.UtcNow) return BadRequest("Hạn sử dụng phải ở tương lai.");
@@ -86,6 +98,7 @@ public sealed class RentalAccountController(RentalCatalog catalog, RentalTenantH
             var tenant = new RentalTenant { UserId = user.Id, Name = input.Name.Trim(), ExpiresAt = input.ExpiresAt };
             catalog.Tenants.Add(tenant);
             await catalog.SaveChangesAsync(ct);
+            await administration.AssignCustomerRole(user.Id, ct);
             return Ok(new { tenant.Id, user.UserName });
         }
         catch { await users.DeleteAsync(user); throw; }
